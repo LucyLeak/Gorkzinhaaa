@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS tts_solicitacoes (
     texto_falado TEXT NOT NULL,
     audio_url TEXT,
     status TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'processando', 'concluido', 'erro', 'reproduzido')),
+    aprovado BOOLEAN DEFAULT NULL,
     erro TEXT,
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
     concluido_em TIMESTAMPTZ
@@ -91,8 +92,23 @@ CREATE INDEX IF NOT EXISTS idx_memorias_criado_em
 """
 
 
+MIGRATIONS_SQL = """
+-- 002: Add aprovado column to tts_solicitacoes (if missing)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'tts_solicitacoes' AND column_name = 'aprovado'
+    ) THEN
+        ALTER TABLE tts_solicitacoes ADD COLUMN aprovado BOOLEAN DEFAULT NULL;
+    END IF;
+END $$;
+"""
+
+
 async def initialize_schema(db: Database) -> None:
     await db.execute(INIT_SQL)
+    await db.execute(MIGRATIONS_SQL)
 
 
 async def upsert_user(db: Database, youtube_id: str, nome: str | None) -> dict[str, Any]:

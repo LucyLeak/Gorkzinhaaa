@@ -406,17 +406,31 @@ class AdminPanel:
     async def handle_tts_queue(self, request: web.Request) -> web.Response:
         if not self._check_auth(request):
             return self._auth_error()
-        rows = await self.db.fetch(
-            """
-            SELECT t.id, t.texto_original, t.texto_falado, t.audio_url, t.status,
-                   t.aprovado, u.nome AS username
-            FROM tts_solicitacoes t
-            JOIN usuarios u ON u.id = t.usuario_id
-            WHERE t.status = 'concluido'
-            ORDER BY t.criado_em DESC
-            LIMIT 50
-            """
-        )
+        try:
+            rows = await self.db.fetch(
+                """
+                SELECT t.id, t.texto_original, t.texto_falado, t.audio_url, t.status,
+                       t.aprovado, u.nome AS username
+                FROM tts_solicitacoes t
+                JOIN usuarios u ON u.id = t.usuario_id
+                WHERE t.status = 'concluido'
+                ORDER BY t.criado_em DESC
+                LIMIT 50
+                """
+            )
+        except Exception:
+            # Fallback: column 'aprovado' may not exist yet (pending migration)
+            rows = await self.db.fetch(
+                """
+                SELECT t.id, t.texto_original, t.texto_falado, t.audio_url, t.status,
+                       NULL AS aprovado, u.nome AS username
+                FROM tts_solicitacoes t
+                JOIN usuarios u ON u.id = t.usuario_id
+                WHERE t.status = 'concluido'
+                ORDER BY t.criado_em DESC
+                LIMIT 50
+                """
+            )
         items = []
         for r in rows:
             items.append({
@@ -445,10 +459,16 @@ class AdminPanel:
         except ValueError:
             return web.json_response({"error": "Invalid ID"}, status=400)
 
-        await self.db.execute(
-            "UPDATE tts_solicitacoes SET aprovado = $1 WHERE id = $2",
-            aprovado, tts_id_int,
-        )
+        try:
+            await self.db.execute(
+                "UPDATE tts_solicitacoes SET aprovado = $1 WHERE id = $2",
+                aprovado, tts_id_int,
+            )
+        except Exception:
+            return web.json_response(
+                {"error": "Coluna 'aprovado' ainda não existe no banco. A migration será aplicada no próximo deploy."},
+                status=500,
+            )
         logger.info("Admin: TTS #%d %s", tts_id_int, "aprovado" if aprovado else "rejeitado")
         return web.json_response({"ok": True, "id": tts_id_int, "aprovado": aprovado})
 
