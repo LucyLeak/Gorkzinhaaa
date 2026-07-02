@@ -118,45 +118,12 @@ class TtsWebSocketServer:
 
         rows = await models.get_pending_tts(self.db, limit=10)
         for row in rows:
-            audio_url = row.get("audio_url") or ""
-            payload = json.dumps({
-                "id": row["id"],
-                "username": row.get("autor") or "",
-                "message": row.get("texto_falado") or "",
-                "type": "url",
-                "audio": audio_url,
-            })
-
-            # Broadcast to all connected clients
-            dead: list[web.WebSocketResponse] = []
-            delivered = 0
-            for ws in list(self._clients):
-                try:
-                    await ws.send_str(payload)
-                    delivered += 1
-                except (ConnectionError, asyncio.TimeoutError):
-                    dead.append(ws)
-            for ws in dead:
-                self._clients.discard(ws)
-
-            # Only mark as reproduzido if at least one client received it.
-            # If no client was delivered, leave it as 'concluido' so it
-            # will be retried on the next poll cycle.
-            if delivered > 0:
-                await models.mark_tts_reproduzido(self.db, row["id"])
-                if row.get("texto_falado"):
-                    logger.info(
-                        "📢 TTS #%d broadcasted to %d client(s): \"%s...\"",
-                        row["id"],
-                        delivered,
-                        str(row["texto_falado"])[:60],
-                    )
-            else:
-                logger.warning(
-                    "⚠️ TTS #%d nao entregue a nenhum cliente (todos offline). "
-                    "Sera retentado no proximo poll.",
-                    row["id"],
-                )
+            await self._broadcast_tts(
+                tts_id=row["id"],
+                username=str(row.get("autor") or ""),
+                message=str(row.get("texto_falado") or ""),
+                audio_url=str(row.get("audio_url") or ""),
+            )
 
     # ── HTTP test endpoints ─────────────────────────────────────────
 
@@ -178,7 +145,7 @@ class TtsWebSocketServer:
         })
 
     async def _handle_tts_test(self, request: web.Request) -> web.Response:
-        """GET /tts-test?text=... — Gera um TTS de teste via HTTP (sem WebSocket).
+        """GET /tts-test?text=... — Gera um TTS de teste e faz broadcast via WebSocket.
 
         Query params:
             text  — Frase para sintetizar (default: "Teste TTS via HTTP")
@@ -192,13 +159,18 @@ class TtsWebSocketServer:
 
         from pathlib import Path
 
-        from youtube_bot.fun.tts import generate_tts, _upload_to_catbox
+        from youtube_bot.fun.tts import generate_tts, sanitize_tts_text, _upload_to_catbox
 
         text = request.query.get("text", "Teste TTS via HTTP do bot Gorkzinhaaa!")
         voice = request.query.get("voice")
+        texto_falado = sanitize_tts_text(text)
 
         try:
-            audio_path = await generate_tts(text, self.settings, self.db, user_id=0, voice=voice)
+            # Insert into DB so the poller can broadcast it
+            tts_id = await models.insert_tts_request(self.db, 0, text, texto_falado)
+            await models.update_tts_status(self.db, tts_id, "processando")
+
+            audio_path = await generate_tts(texto_falado, self.settings, self.db, user_id=0, voice=voice)
             catbox_url = await _upload_to_catbox(audio_path)
 
             # Clean up local file
@@ -208,6 +180,9 @@ class TtsWebSocketServer:
                 pass
 
             if catbox_url:
+                await models.update_tts_status(self.db, tts_id, "concluido", audio_url=catbox_url)
+                # Immediately broadcast to all connected clients
+                await self._broadcast_tts(tts_id, "HTTP Tester", texto_falado, catbox_url)
                 return web.json_response({
                     "ok": True,
                     "text": text,
@@ -216,6 +191,7 @@ class TtsWebSocketServer:
                     "voice": voice or self.settings.tts_voice,
                 })
             else:
+                await models.update_tts_status(self.db, tts_id, "erro", erro="Falha ao enviar audio TTS para o Catbox.")
                 return web.json_response({
                     "ok": False,
                     "error": "Catbox upload failed",
@@ -227,3 +203,32 @@ class TtsWebSocketServer:
                 "ok": False,
                 "error": str(exc),
             }, status=500)
+
+    async def _broadcast_tts(
+        self, tts_id: int, username: str, message: str, audio_url: str
+    ) -> None:
+        """Send a TTS payload to all connected WebSocket clients immediately."""
+        if not self._clients:
+            return
+        payload = json.dumps({
+            "id": tts_id,
+            "username": username,
+            "message": message,
+            "type": "url",
+            "audio": audio_url,
+        })
+        dead: list[web.WebSocketResponse] = []
+        delivered = 0
+        for ws in list(self._clients):
+            try:
+                await ws.send_str(payload)
+                delivered += 1
+            except (ConnectionError, asyncio.TimeoutError):
+                dead.append(ws)
+        for ws in dead:
+            self._clients.discard(ws)
+        if delivered > 0:
+            await models.mark_tts_reproduzido(self.db, tts_id)
+            logger.info("📢 TTS #%d broadcasted to %d client(s): \"%s...\"", tts_id, delivered, message[:60])
+        else:
+            logger.warning("⚠️ TTS #%d nao entregue a nenhum cliente (todos offline).", tts_id)
