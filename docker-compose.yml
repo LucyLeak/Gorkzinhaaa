@@ -5,4 +5,4 @@ services:
       - .env
     restart: unless-stopped
     ports:
-      - "${TTS_WS_PORT:-8765}:8765"
+      - "${PORT:-${TTS_WS_PORT:-8765}}:${PORT:-${TTS_WS_PORT:-8765}}"

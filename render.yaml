@@ -1,0 +1,65 @@
+services:
+  - type: web
+    name: gorkzinhaaa
+    runtime: docker
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_BASE_URL
+        sync: false
+      - key: OPENAI_CHAT_MODEL
+        sync: false
+      - key: OPENAI_EMBEDDING_MODEL
+        sync: false
+      - key: OPENAI_EMBEDDING_DIMENSIONS
+        sync: false
+      - key: NEON_DATABASE_URL
+        sync: false
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REFRESH_TOKEN
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: YOUTUBE_CHANNEL_HANDLE
+        sync: false
+      - key: YOUTUBE_VIDEO_IDS
+        sync: false
+      - key: YOUTUBE_BOT_CHANNEL_ID
+        sync: false
+      - key: YOUTUBE_LIVE_URL
+        sync: false
+      - key: YOUTUBE_LIVE_CONNECT_MESSAGE
+        sync: false
+      - key: GIPHY_API_KEY
+        sync: false
+      - key: TTS_PROVIDER
+        sync: false
+      - key: TTS_VOICE
+        sync: false
+      - key: TTS_OUTPUT_DIR
+        sync: false
+      - key: TTS_COOLDOWN_MINUTES
+        sync: false
+      - key: TTS_WS_PORT
+        sync: false
+      - key: DRY_RUN
+        sync: false
+      - key: POLL_INTERVAL_SECONDS
+        sync: false
+      - key: MAX_REPAIR_ATTEMPTS
+        sync: false
+      - key: COHERENCE_THRESHOLD
+        sync: false
+      - key: BRAIN_SURPRISE_CHANCE
+        sync: false
+      - key: FORBIDDEN_WORDS
+        sync: false
+      - key: LOG_LEVEL
+        sync: false
+      - key: MEMORY_RETENTION_DAYS
+        sync: false

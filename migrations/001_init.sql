@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
     primeiro_contato TIMESTAMPTZ NOT NULL DEFAULT now(),
     total_interacoes INTEGER NOT NULL DEFAULT 0,
     pontos INTEGER NOT NULL DEFAULT 0,
-    ultimo_cerebro TEXT CHECK (ultimo_cerebro IN ('A', 'B')), -- restrição de domínio
+    ultimo_cerebro TEXT CHECK (ultimo_cerebro IN ('cerebro_a', 'cerebro_b')), -- restrição de domínio
     sucesso_cerebro_a INTEGER NOT NULL DEFAULT 0,
     sucesso_cerebro_b INTEGER NOT NULL DEFAULT 0,
     falhas_cerebro_a INTEGER NOT NULL DEFAULT 0,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS respostas_geradas (
     usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
     mensagem_original TEXT NOT NULL,
     resposta_gerada TEXT NOT NULL,
-    cerebro_utilizado TEXT NOT NULL CHECK (cerebro_utilizado IN ('A', 'B')),
+    cerebro_utilizado TEXT NOT NULL CHECK (cerebro_utilizado IN ('cerebro_a', 'cerebro_b')),
     aprovada BOOLEAN NOT NULL,
     motivo_rejeicao TEXT,
     timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -90,7 +90,7 @@ CREATE INDEX IF NOT EXISTS idx_memorias_tipo_criado
 -- 6. TABELA configuracoes_cerebro (com verificação de coluna)
 -- =====================================================
 CREATE TABLE IF NOT EXISTS configuracoes_cerebro (
-    nome_cerebro TEXT PRIMARY KEY CHECK (nome_cerebro IN ('A', 'B')),
+    nome_cerebro TEXT PRIMARY KEY CHECK (nome_cerebro IN ('cerebro_a', 'cerebro_b')),
     prompt_base TEXT NOT NULL,
     peso_prioridade REAL NOT NULL DEFAULT 1.0,
     ultima_atualizacao TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -112,8 +112,8 @@ END $$;
 -- Inserir configurações padrão (se não existirem)
 INSERT INTO configuracoes_cerebro (nome_cerebro, prompt_base, peso_prioridade, temperatura)
 VALUES 
-    ('A', 'Você é um assistente sério, analítico e educado. Responda de forma clara e objetiva.', 1.0, 0.3),
-    ('B', 'Você é um comediante inteligente, cheio de ironia e piadas. Seja criativo e divertido, mas nunca ofensivo.', 1.0, 0.9)
+    ('cerebro_a', 'Você é um assistente sério, analítico e educado. Responda de forma clara e objetiva.', 1.0, 0.3),
+    ('cerebro_b', 'Você é um comediante inteligente, cheio de ironia e piadas. Seja criativo e divertido, mas nunca ofensivo.', 1.0, 0.9)
 ON CONFLICT (nome_cerebro) DO UPDATE
 SET 
     prompt_base = EXCLUDED.prompt_base,

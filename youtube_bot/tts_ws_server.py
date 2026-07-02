@@ -40,6 +40,7 @@ class TtsWebSocketServer:
         self._site: web.TCPSite | None = None
 
         # Routes
+        self._app.router.add_get("/", self._handle_health)
         self._app.router.add_get("/ws", self._handle_websocket)
         self._app.router.add_get("/health", self._handle_health)
 

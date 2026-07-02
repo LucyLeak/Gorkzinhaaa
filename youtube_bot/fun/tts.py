@@ -86,6 +86,8 @@ async def _generate_gtts(text: str, file_path: Path, settings: Settings) -> str:
 
 async def _generate_openai_tts(text: str, file_path: Path, settings: Settings) -> str:
     """Gera audio usando OpenAI TTS API."""
+    import asyncio
+
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(
@@ -94,13 +96,13 @@ async def _generate_openai_tts(text: str, file_path: Path, settings: Settings) -
     )
     voice = settings.tts_voice if settings.tts_voice in {"alloy", "echo", "fable", "onyx", "nova", "shimmer"} else "nova"
 
-    async with client as c:
-        response = await c.audio.speech.create(
-            model="tts-1",
-            voice=voice,
-            input=text,
-        )
-        response.stream_to_file(str(file_path))
+    response = await client.audio.speech.create(
+        model="tts-1",
+        voice=voice,
+        input=text,
+    )
+    # stream_to_file is blocking — run in thread to avoid blocking the event loop
+    await asyncio.to_thread(response.stream_to_file, str(file_path))
 
     logger.info("Audio TTS (OpenAI) salvo em: %s", file_path)
     return str(file_path)

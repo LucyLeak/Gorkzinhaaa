@@ -112,7 +112,9 @@ def load_settings() -> Settings:
         tts_output_dir=os.getenv("TTS_OUTPUT_DIR", "data/tts_audio"),
         tts_cooldown_minutes=_int(os.getenv("TTS_COOLDOWN_MINUTES"), 10),
         tts_ws_host=os.getenv("TTS_WS_HOST", "0.0.0.0"),
-        tts_ws_port=_int(os.getenv("TTS_WS_PORT"), 8765),
+        tts_ws_port=_int(
+            os.getenv("PORT") or os.getenv("TTS_WS_PORT"), 8765
+        ),
         memory_retention_days=_int(os.getenv("MEMORY_RETENTION_DAYS"), 14),
         dry_run=_bool(os.getenv("DRY_RUN"), True),
         poll_interval_seconds=_int(os.getenv("POLL_INTERVAL_SECONDS"), 30),
