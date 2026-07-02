@@ -19,3 +19,6 @@ venv/
 Thumbs.db
 
 data/tts_audio/
+
+# Backend TTS (node_modules e arquivos)
+tts-backend/
