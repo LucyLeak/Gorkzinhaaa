@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import aiohttp
@@ -51,6 +52,8 @@ class TtsWebSocketServer:
         self._app.router.add_get("/health", self._handle_health)
         self._app.router.add_get("/pending-tts", self._handle_pending_tts)
         self._app.router.add_get("/tts-test", self._handle_tts_test)
+        # Serve local TTS audio files as fallback when Catbox is down
+        self._app.router.add_static("/audio/", Path("data/tts_audio"), show_index=False)
 
     async def start(self) -> None:
         """Start the HTTP server and the DB poller background task."""
@@ -157,9 +160,7 @@ class TtsWebSocketServer:
                 status=503,
             )
 
-        from pathlib import Path
-
-        from youtube_bot.fun.tts import generate_tts, sanitize_tts_text, _upload_to_catbox
+        from youtube_bot.fun.tts import generate_tts, sanitize_tts_text, upload_tts_audio
 
         text = request.query.get("text", "Teste TTS via HTTP do bot Gorkzinhaaa!")
         voice = request.query.get("voice")
@@ -175,30 +176,31 @@ class TtsWebSocketServer:
             await models.update_tts_status(self.db, tts_id, "processando")
 
             audio_path = await generate_tts(texto_falado, self.settings, self.db, user_id=sys_user_id, voice=voice)
-            catbox_url = await _upload_to_catbox(audio_path)
+            public_url = await upload_tts_audio(audio_path, self.settings)
 
-            # Clean up local file
-            try:
-                Path(audio_path).unlink(missing_ok=True)
-            except OSError:
-                pass
+            # Only delete local file if uploaded to Catbox (not local fallback)
+            if public_url and "catbox.moe" in public_url:
+                try:
+                    Path(audio_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
-            if catbox_url:
-                await models.update_tts_status(self.db, tts_id, "concluido", audio_url=catbox_url)
+            if public_url:
+                await models.update_tts_status(self.db, tts_id, "concluido", audio_url=public_url)
                 # Immediately broadcast to all connected clients
-                await self._broadcast_tts(tts_id, "HTTP Tester", texto_falado, catbox_url)
+                await self._broadcast_tts(tts_id, "HTTP Tester", texto_falado, public_url)
                 return web.json_response({
                     "ok": True,
                     "text": text,
-                    "audio_url": catbox_url,
+                    "audio_url": public_url,
                     "provider": self.settings.tts_provider,
                     "voice": voice or self.settings.tts_voice,
                 })
             else:
-                await models.update_tts_status(self.db, tts_id, "erro", erro="Falha ao enviar audio TTS para o Catbox.")
+                await models.update_tts_status(self.db, tts_id, "erro", erro="Falha ao enviar audio TTS (Catbox offline e sem fallback local).")
                 return web.json_response({
                     "ok": False,
-                    "error": "Catbox upload failed",
+                    "error": "Catbox upload failed and no local fallback available",
                     "local_path": audio_path,
                 }, status=502)
         except Exception as exc:

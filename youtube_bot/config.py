@@ -54,6 +54,7 @@ class Settings:
     tts_cooldown_minutes: int
     tts_ws_host: str
     tts_ws_port: int
+    public_base_url: str
     memory_retention_days: int
     dry_run: bool
     poll_interval_seconds: int
@@ -115,6 +116,7 @@ def load_settings() -> Settings:
         tts_ws_port=_int(
             os.getenv("PORT") or os.getenv("TTS_WS_PORT"), 8765
         ),
+        public_base_url=os.getenv("PUBLIC_BASE_URL", ""),
         memory_retention_days=_int(os.getenv("MEMORY_RETENTION_DAYS"), 14),
         dry_run=_bool(os.getenv("DRY_RUN"), True),
         poll_interval_seconds=_int(os.getenv("POLL_INTERVAL_SECONDS"), 30),

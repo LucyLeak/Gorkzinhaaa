@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -177,6 +178,36 @@ async def _upload_to_catbox(file_path: str) -> str | None:
         return None
 
 
+async def upload_tts_audio(audio_path: str, settings: Settings) -> str | None:
+    """Tenta upload para Catbox (ate 2 tentativas). Se falhar, retorna URL local.
+
+    Retorna a URL publica (Catbox ou local) ou None se o arquivo nao existir.
+    """
+    path = Path(audio_path)
+    if not path.is_file():
+        logger.warning("Arquivo TTS nao encontrado: %s", path)
+        return None
+
+    # Try Catbox up to 2 times
+    for attempt in (1, 2):
+        url = await _upload_to_catbox(audio_path)
+        if url:
+            return url
+        if attempt < 2:
+            logger.warning("Catbox tentativa %d falhou, retentando...", attempt)
+            await asyncio.sleep(1.0)
+
+    # Catbox failed both times — fall back to local URL
+    base = settings.public_base_url.rstrip("/") if settings.public_base_url else ""
+    if base:
+        local_url = f"{base}/audio/{path.name}"
+        logger.warning("Catbox indisponivel, usando URL local: %s", local_url)
+        return local_url
+
+    logger.warning("Catbox indisponivel e PUBLIC_BASE_URL nao configurada — sem fallback.")
+    return None
+
+
 async def handle_tts_command(
     message: str,
     user_id: int,
@@ -216,23 +247,25 @@ async def handle_tts_command(
     try:
         audio_path = await generate_tts(texto_falado, settings, db, user_id)
 
-        # Upload to Catbox for a public HTTPS URL
-        catbox_url = await _upload_to_catbox(audio_path)
-        if catbox_url:
-            await models.update_tts_status(db, tts_id, "concluido", audio_url=catbox_url)
-            try:
-                Path(audio_path).unlink(missing_ok=True)
-            except OSError:
-                pass
-            return f"Audio TTS gerado: {catbox_url}"
+        # Upload with retry (Catbox 2x, then local fallback)
+        public_url = await upload_tts_audio(audio_path, settings)
+        if public_url:
+            await models.update_tts_status(db, tts_id, "concluido", audio_url=public_url)
+            # Only delete local file if it was uploaded to Catbox (not local fallback)
+            if "catbox.moe" in public_url:
+                try:
+                    Path(audio_path).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return f"Audio TTS gerado: {public_url}"
 
         await models.update_tts_status(
             db,
             tts_id,
             "erro",
-            erro="Falha ao enviar audio TTS para o Catbox.",
+            erro="Falha ao enviar audio TTS (Catbox offline e sem fallback local).",
         )
-        return "Falha ao enviar audio TTS para o Catbox. Tente novamente mais tarde."
+        return "Falha ao enviar audio TTS. Tente novamente mais tarde."
     except Exception as exc:
         logger.exception("Erro ao gerar TTS para tts_id=%s", tts_id)
         await models.update_tts_status(db, tts_id, "erro", erro=str(exc))
