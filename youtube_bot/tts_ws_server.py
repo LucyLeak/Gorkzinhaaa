@@ -3,12 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import TYPE_CHECKING
 
 import aiohttp
 from aiohttp import web
 
 from youtube_bot.db import models
 from youtube_bot.db.pool import Database
+
+if TYPE_CHECKING:
+    from youtube_bot.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +32,13 @@ class TtsWebSocketServer:
         host: str = "0.0.0.0",
         port: int = 8765,
         poll_interval: float = 2.0,
+        settings: Settings | None = None,
     ) -> None:
         self.db = db
         self.host = host
         self.port = port
         self.poll_interval = poll_interval
+        self.settings = settings
         self._clients: set[web.WebSocketResponse] = set()
         self._app = web.Application()
         self._runner: web.AppRunner | None = None
@@ -43,6 +49,8 @@ class TtsWebSocketServer:
         self._app.router.add_get("/", self._handle_health)
         self._app.router.add_get("/ws", self._handle_websocket)
         self._app.router.add_get("/health", self._handle_health)
+        self._app.router.add_get("/pending-tts", self._handle_pending_tts)
+        self._app.router.add_get("/tts-test", self._handle_tts_test)
 
     async def start(self) -> None:
         """Start the HTTP server and the DB poller background task."""
@@ -121,20 +129,101 @@ class TtsWebSocketServer:
 
             # Broadcast to all connected clients
             dead: list[web.WebSocketResponse] = []
-            for ws in self._clients:
+            delivered = 0
+            for ws in list(self._clients):
                 try:
                     await ws.send_str(payload)
+                    delivered += 1
                 except (ConnectionError, asyncio.TimeoutError):
                     dead.append(ws)
             for ws in dead:
                 self._clients.discard(ws)
 
-            # Mark as reproduzido
-            await models.mark_tts_reproduzido(self.db, row["id"])
-
-            if row.get("texto_falado"):
-                logger.info(
-                    "📢 TTS #%d broadcasted: \"%s...\"",
+            # Only mark as reproduzido if at least one client received it.
+            # If no client was delivered, leave it as 'concluido' so it
+            # will be retried on the next poll cycle.
+            if delivered > 0:
+                await models.mark_tts_reproduzido(self.db, row["id"])
+                if row.get("texto_falado"):
+                    logger.info(
+                        "📢 TTS #%d broadcasted to %d client(s): \"%s...\"",
+                        row["id"],
+                        delivered,
+                        str(row["texto_falado"])[:60],
+                    )
+            else:
+                logger.warning(
+                    "⚠️ TTS #%d nao entregue a nenhum cliente (todos offline). "
+                    "Sera retentado no proximo poll.",
                     row["id"],
-                    str(row["texto_falado"])[:60],
                 )
+
+    # ── HTTP test endpoints ─────────────────────────────────────────
+
+    async def _handle_pending_tts(self, request: web.Request) -> web.Response:
+        """GET /pending-tts — Lista TTS concluídos pendentes de broadcast."""
+        rows = await models.get_pending_tts(self.db, limit=20)
+        return web.json_response({
+            "count": len(rows),
+            "clients_connected": len(self._clients),
+            "items": [
+                {
+                    "id": r["id"],
+                    "username": r.get("autor"),
+                    "message": r.get("texto_falado"),
+                    "audio_url": r.get("audio_url"),
+                }
+                for r in rows
+            ],
+        })
+
+    async def _handle_tts_test(self, request: web.Request) -> web.Response:
+        """GET /tts-test?text=... — Gera um TTS de teste via HTTP (sem WebSocket).
+
+        Query params:
+            text  — Frase para sintetizar (default: "Teste TTS via HTTP")
+            voice — Voz (opcional, sobrescreve config)
+        """
+        if self.settings is None:
+            return web.json_response(
+                {"error": "TTS settings not configured on this server"},
+                status=503,
+            )
+
+        from pathlib import Path
+
+        from youtube_bot.fun.tts import generate_tts, _upload_to_catbox
+
+        text = request.query.get("text", "Teste TTS via HTTP do bot Gorkzinhaaa!")
+        voice = request.query.get("voice")
+
+        try:
+            audio_path = await generate_tts(text, self.settings, self.db, user_id=0, voice=voice)
+            catbox_url = await _upload_to_catbox(audio_path)
+
+            # Clean up local file
+            try:
+                Path(audio_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+            if catbox_url:
+                return web.json_response({
+                    "ok": True,
+                    "text": text,
+                    "audio_url": catbox_url,
+                    "provider": self.settings.tts_provider,
+                    "voice": voice or self.settings.tts_voice,
+                })
+            else:
+                return web.json_response({
+                    "ok": False,
+                    "error": "Catbox upload failed",
+                    "local_path": audio_path,
+                }, status=502)
+        except Exception as exc:
+            logger.exception("TTS test endpoint error")
+            return web.json_response({
+                "ok": False,
+                "error": str(exc),
+            }, status=500)

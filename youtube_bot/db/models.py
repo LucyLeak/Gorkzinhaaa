@@ -251,11 +251,11 @@ async def get_tts_request(db: Database, tts_id: int) -> dict[str, object] | None
 
 
 async def get_last_tts_time(db: Database, user_id: int) -> str | None:
-    """Retorna o timestamp da ultima solicitacao TTS concluida do usuario, ou None."""
+    """Retorna o timestamp da ultima solicitacao TTS concluida (ou ja reproduzida) do usuario, ou None."""
     row = await db.fetchrow(
         """
         SELECT criado_em FROM tts_solicitacoes
-        WHERE usuario_id = $1 AND status = 'concluido'
+        WHERE usuario_id = $1 AND status IN ('concluido', 'reproduzido')
         ORDER BY criado_em DESC
         LIMIT 1
         """,

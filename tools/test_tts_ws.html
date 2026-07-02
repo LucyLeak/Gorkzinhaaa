@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Teste TTS WebSocket — Gorkzinhaaa</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --card: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --green: #3fb950;
+            --red: #f85149;
+            --blue: #58a6ff;
+            --yellow: #d2991d;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 { color: var(--blue); margin-bottom: 8px; }
+        .subtitle { color: #8b949e; margin-bottom: 24px; font-size: 14px; }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .card h2 { font-size: 16px; margin-bottom: 12px; color: var(--blue); }
+
+        label { display: block; font-size: 13px; margin-bottom: 4px; color: #8b949e; }
+        input, select {
+            width: 100%;
+            padding: 8px 12px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+        input:focus, select:focus { outline: none; border-color: var(--blue); }
+
+        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+        button {
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.15s;
+        }
+        .btn-connect { background: #238636; color: white; border-color: #238636; }
+        .btn-connect:hover { background: #2ea043; }
+        .btn-connect.connected { background: var(--red); border-color: var(--red); }
+        .btn-send { background: var(--blue); color: #0d1117; border-color: var(--blue); }
+        .btn-send:hover { opacity: 0.85; }
+        .btn-send:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-clear { background: transparent; color: #8b949e; }
+        .btn-clear:hover { color: var(--text); }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+        .dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #484f58;
+        }
+        .dot.online { background: var(--green); }
+        .dot.offline { background: var(--red); }
+
+        #log {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 12px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Cascadia Code', 'Fira Code', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .log-info { color: #8b949e; }
+        .log-sent { color: var(--blue); }
+        .log-recv { color: var(--green); }
+        .log-error { color: var(--red); }
+        .log-audio { color: var(--yellow); }
+
+        .audio-player {
+            width: 100%;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+
+<h1>🔊 Teste TTS WebSocket</h1>
+<p class="subtitle">Conecta no servidor WebSocket do Gorkzinhaaa e testa o fluxo TTS</p>
+
+<!-- Conexão -->
+<div class="card">
+    <h2>1. Conexão WebSocket</h2>
+    <label for="wsUrl">URL do WebSocket</label>
+    <input type="text" id="wsUrl" value="wss://gorkzinhaaa.onrender.com/ws"
+           placeholder="wss://gorkzinhaaa.onrender.com/ws">
+    <div class="btn-row">
+        <button class="btn-connect" id="btnConnect" onclick="toggleConnection()">
+            Conectar
+        </button>
+        <span class="status">
+            <span class="dot offline" id="statusDot"></span>
+            <span id="statusText">Desconectado</span>
+        </span>
+    </div>
+</div>
+
+<!-- Comandos -->
+<div class="card">
+    <h2>2. Enviar Comando</h2>
+    <label for="cmdInput">Mensagem (ex: ping, ou qualquer texto)</label>
+    <input type="text" id="cmdInput" value="ping" placeholder="Digite ping ou qualquer mensagem...">
+    <div class="btn-row">
+        <button class="btn-send" id="btnSend" onclick="sendMessage()" disabled>Enviar</button>
+    </div>
+</div>
+
+<!-- Log -->
+<div class="card">
+    <h2>3. Log de Mensagens</h2>
+    <div class="btn-row" style="margin-bottom: 8px;">
+        <button class="btn-clear" onclick="clearLog()">Limpar Log</button>
+    </div>
+    <div id="log">
+        <span class="log-info">Aguardando conexão...</span>
+    </div>
+    <div id="audioContainer"></div>
+</div>
+
+<script>
+    let ws = null;
+    const logEl = document.getElementById('log');
+    const audioContainer = document.getElementById('audioContainer');
+
+    function log(msg, cls = 'log-info') {
+        const time = new Date().toLocaleTimeString();
+        logEl.innerHTML += `<span class="${cls}">[${time}] ${msg}</span>\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function clearLog() {
+        logEl.innerHTML = '';
+        audioContainer.innerHTML = '';
+    }
+
+    function updateStatus(connected) {
+        const dot = document.getElementById('statusDot');
+        const text = document.getElementById('statusText');
+        const btn = document.getElementById('btnConnect');
+        const btnSend = document.getElementById('btnSend');
+
+        if (connected) {
+            dot.className = 'dot online';
+            text.textContent = 'Conectado';
+            btn.textContent = 'Desconectar';
+            btn.classList.add('connected');
+            btnSend.disabled = false;
+        } else {
+            dot.className = 'dot offline';
+            text.textContent = 'Desconectado';
+            btn.textContent = 'Conectar';
+            btn.classList.remove('connected');
+            btnSend.disabled = true;
+        }
+    }
+
+    function toggleConnection() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.close(1000, 'Usuário desconectou');
+            return;
+        }
+
+        const url = document.getElementById('wsUrl').value.trim();
+        if (!url) {
+            log('❌ URL do WebSocket vazia', 'log-error');
+            return;
+        }
+
+        log(`🔌 Conectando em ${url}...`);
+        try {
+            ws = new WebSocket(url);
+        } catch (e) {
+            log(`❌ Erro ao criar WebSocket: ${e.message}`, 'log-error');
+            return;
+        }
+
+        ws.onopen = () => {
+            log('✅ Conectado ao servidor WebSocket!', 'log-recv');
+            updateStatus(true);
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                log(`📩 Recebido: ${JSON.stringify(data)}`, 'log-recv');
+
+                // Se for uma URL de áudio, mostra o player
+                if (data.type === 'url' && data.audio) {
+                    log(`🔊 Áudio TTS: ${data.audio}`, 'log-audio');
+                    audioContainer.innerHTML = `
+                        <audio class="audio-player" controls autoplay>
+                            <source src="${data.audio}" type="audio/mpeg">
+                            Seu navegador não suporta áudio.
+                        </audio>
+                        <p style="font-size:12px;color:#8b949e;margin-top:4px;">
+                            📝 "${data.message}" — por ${data.username}
+                        </p>
+                    `;
+                }
+            } catch {
+                log(`📩 Recebido (raw): ${event.data}`, 'log-recv');
+            }
+        };
+
+        ws.onclose = (event) => {
+            log(`🔌 Desconectado (code: ${event.code}, reason: ${event.reason || 'sem motivo'})`, 'log-error');
+            updateStatus(false);
+            ws = null;
+        };
+
+        ws.onerror = (error) => {
+            log('❌ Erro na conexão WebSocket', 'log-error');
+            console.error('WebSocket error:', error);
+        };
+    }
+
+    function sendMessage() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            log('❌ Não está conectado', 'log-error');
+            return;
+        }
+        const msg = document.getElementById('cmdInput').value.trim();
+        if (!msg) return;
+
+        ws.send(msg);
+        log(`📤 Enviado: ${msg}`, 'log-sent');
+    }
+
+    // Enviar com Enter
+    document.getElementById('cmdInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') sendMessage();
+    });
+
+    // Health check rápido ao carregar
+    (async () => {
+        const wsUrl = document.getElementById('wsUrl').value.trim();
+        const httpUrl = wsUrl
+            .replace('wss://', 'https://')
+            .replace('ws://', 'http://')
+            .replace('/ws', '/health');
+        try {
+            const resp = await fetch(httpUrl);
+            const data = await resp.json();
+            log(`🏥 Health check: ${JSON.stringify(data)}`);
+        } catch {
+            log('⚠️ Health check falhou (servidor pode estar offline)', 'log-error');
+        }
+    })();
+</script>
+
+</body>
+</html>

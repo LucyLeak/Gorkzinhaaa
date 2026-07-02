@@ -51,6 +51,7 @@ async def generate_tts(
     settings: Settings,
     db: Database,
     user_id: int,
+    voice: str | None = None,
 ) -> str:
     """
     Gera audio TTS a partir do texto e salva em disco.
@@ -68,23 +69,24 @@ async def generate_tts(
         return str(file_path)
 
     if settings.tts_provider == "openai":
-        return await _generate_openai_tts(text, file_path, settings)
+        return await _generate_openai_tts(text, file_path, settings, voice=voice)
     else:
-        return await _generate_gtts(text, file_path, settings)
+        return await _generate_gtts(text, file_path, settings, voice=voice)
 
 
-async def _generate_gtts(text: str, file_path: Path, settings: Settings) -> str:
+async def _generate_gtts(text: str, file_path: Path, settings: Settings, voice: str | None = None) -> str:
     """Gera audio usando gTTS (Google Text-to-Speech)."""
     from gtts import gTTS
 
-    lang = settings.tts_voice if settings.tts_voice in {"pt", "pt-br", "en", "es"} else "pt"
+    lang = voice or settings.tts_voice
+    lang = lang if lang in {"pt", "pt-br", "en", "es"} else "pt"
     tts = gTTS(text=text, lang=lang, slow=False)
     await _run_save(tts, file_path)
     logger.info("Audio TTS (gTTS) salvo em: %s", file_path)
     return str(file_path)
 
 
-async def _generate_openai_tts(text: str, file_path: Path, settings: Settings) -> str:
+async def _generate_openai_tts(text: str, file_path: Path, settings: Settings, voice: str | None = None) -> str:
     """Gera audio usando OpenAI TTS API."""
     import asyncio
 
@@ -94,11 +96,12 @@ async def _generate_openai_tts(text: str, file_path: Path, settings: Settings) -
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url or None,
     )
-    voice = settings.tts_voice if settings.tts_voice in {"alloy", "echo", "fable", "onyx", "nova", "shimmer"} else "nova"
+    selected_voice = voice or settings.tts_voice
+    selected_voice = selected_voice if selected_voice in {"alloy", "echo", "fable", "onyx", "nova", "shimmer"} else "nova"
 
     response = await client.audio.speech.create(
         model="tts-1",
-        voice=voice,
+        voice=selected_voice,
         input=text,
     )
     # stream_to_file is blocking — run in thread to avoid blocking the event loop

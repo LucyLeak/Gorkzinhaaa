@@ -99,6 +99,7 @@ async def main() -> None:
         host=settings.tts_ws_host,
         port=settings.tts_ws_port,
         poll_interval=2.0,
+        settings=settings,
     )
     await tts_ws.start()
 
