@@ -154,36 +154,57 @@ async def main() -> None:
             pass
         return
 
+    quota_pause_until: float = 0  # timestamp until which to skip YouTube API calls
+
     try:
         while True:
+            now = asyncio.get_event_loop().time()
+
+            # Skip YouTube API calls if quota is exhausted
+            if now < quota_pause_until:
+                await asyncio.sleep(settings.poll_interval_seconds)
+                continue
+
             # 1. Conectar na live direta ou descobrir novas lives do canal
-            if live_video_id and live_video_id not in known_live_ids:
-                await connect_to_live_video(
-                    youtube_client=youtube_client,
-                    live_client=live_client,
-                    director=director,
-                    video_id=live_video_id,
-                    bot_channel_id=settings.youtube_bot_channel_id,
-                    connect_message=settings.youtube_live_connect_message,
-                    known_live_ids=known_live_ids,
-                )
-            elif channel_id and live_discovery_enabled:
-                live_discovery_enabled = await discover_and_connect_lives(
-                    youtube_client=youtube_client,
-                    live_client=live_client,
-                    director=director,
-                    channel_id=channel_id,
-                    bot_channel_id=settings.youtube_bot_channel_id,
-                    connect_message=settings.youtube_live_connect_message,
-                    known_live_ids=known_live_ids,
+            try:
+                if live_video_id and live_video_id not in known_live_ids:
+                    await connect_to_live_video(
+                        youtube_client=youtube_client,
+                        live_client=live_client,
+                        director=director,
+                        video_id=live_video_id,
+                        bot_channel_id=settings.youtube_bot_channel_id,
+                        connect_message=settings.youtube_live_connect_message,
+                        known_live_ids=known_live_ids,
+                    )
+                elif channel_id and live_discovery_enabled:
+                    live_discovery_enabled = await discover_and_connect_lives(
+                        youtube_client=youtube_client,
+                        live_client=live_client,
+                        director=director,
+                        channel_id=channel_id,
+                        bot_channel_id=settings.youtube_bot_channel_id,
+                        connect_message=settings.youtube_live_connect_message,
+                        known_live_ids=known_live_ids,
+                    )
+            except YouTubeQuotaExceededError:
+                quota_pause_until = now + 3600  # Pause YouTube API for 1 hour
+                logger.warning(
+                    "Quota do YouTube esgotada. Pausando chamadas a API por 1 hora "
+                    "(ate %s UTC). O servidor WebSocket e admin panel continuam ativos.",
+                    asyncio.get_event_loop().time() + 3600,
                 )
 
             # 2. Poll de comentarios em videos fixos
-            if settings.youtube_video_ids:
-                await poll_video_comments(
-                    youtube_client, director,
-                    settings.youtube_bot_channel_id, last_seen_by_video,
-                )
+            if settings.youtube_video_ids and now >= quota_pause_until:
+                try:
+                    await poll_video_comments(
+                        youtube_client, director,
+                        settings.youtube_bot_channel_id, last_seen_by_video,
+                    )
+                except YouTubeQuotaExceededError:
+                    quota_pause_until = now + 3600
+                    logger.warning("Quota do YouTube esgotada nos comentarios. Pausando por 1 hora.")
 
             await asyncio.sleep(settings.poll_interval_seconds)
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -208,12 +229,7 @@ async def connect_to_live_video(
     try:
         live_chat_id = await youtube_client.get_active_live_chat_id(video_id)
     except YouTubeQuotaExceededError:
-        logger.error(
-            "Cota da API do YouTube esgotada ao buscar a live %s. "
-            "Tente novamente quando a cota diaria resetar.",
-            video_id,
-        )
-        return
+        raise  # Propagate to main loop for global quota pause
     except Exception as exc:
         logger.warning("Ainda nao foi possivel conectar na live %s: %s", video_id, exc)
         return
@@ -246,11 +262,7 @@ async def discover_and_connect_lives(
     try:
         lives = await youtube_client.get_active_lives(channel_id)
     except YouTubeQuotaExceededError:
-        logger.error(
-            "Cota diaria de busca do YouTube esgotada para descoberta de lives. "
-            "Preencha YOUTUBE_LIVE_URL com a URL da live para evitar search.list."
-        )
-        return False
+        raise  # Propagate to main loop for global quota pause
     except ssl.SSLError:
         logger.warning("Erro SSL ao buscar lives (conexao ja resetada internamente).")
         return True
@@ -334,6 +346,12 @@ async def poll_live_chat(
             # YouTube recomenda esperar o pollingIntervalMillis
             await asyncio.sleep(poll_interval_ms / 1000.0)
 
+        except YouTubeQuotaExceededError:
+            logger.warning(
+                "Cota da API do YouTube esgotada no chat %s. Pausando live chat.",
+                live_chat_id,
+            )
+            return  # Stop immediately — no point retrying until quota resets
         except ssl.SSLError:
             consecutive_errors += 1
             logger.warning(
@@ -399,6 +417,8 @@ async def poll_video_comments(
     for video_id, last_seen in list(last_seen_by_video.items()):
         try:
             comments = await youtube_client.get_new_comments(video_id, last_seen)
+        except YouTubeQuotaExceededError:
+            raise  # Propagate to main loop for global quota pause
         except Exception:
             logger.exception("Falha ao buscar comentarios do video %s.", video_id)
             continue
