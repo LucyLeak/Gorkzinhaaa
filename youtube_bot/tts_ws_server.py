@@ -166,11 +166,15 @@ class TtsWebSocketServer:
         texto_falado = sanitize_tts_text(text)
 
         try:
+            # Ensure a system user exists for TTS test requests
+            sys_user = await models.upsert_user(self.db, "__tts_system__", "TTS System")
+            sys_user_id = int(sys_user["id"])
+
             # Insert into DB so the poller can broadcast it
-            tts_id = await models.insert_tts_request(self.db, 0, text, texto_falado)
+            tts_id = await models.insert_tts_request(self.db, sys_user_id, text, texto_falado)
             await models.update_tts_status(self.db, tts_id, "processando")
 
-            audio_path = await generate_tts(texto_falado, self.settings, self.db, user_id=0, voice=voice)
+            audio_path = await generate_tts(texto_falado, self.settings, self.db, user_id=sys_user_id, voice=voice)
             catbox_url = await _upload_to_catbox(audio_path)
 
             # Clean up local file
