@@ -52,6 +52,8 @@ class Settings:
     tts_voice: str
     tts_output_dir: str
     tts_cooldown_minutes: int
+    tts_ws_host: str
+    tts_ws_port: int
     memory_retention_days: int
     dry_run: bool
     poll_interval_seconds: int
@@ -109,6 +111,8 @@ def load_settings() -> Settings:
         tts_voice=os.getenv("TTS_VOICE", "pt"),
         tts_output_dir=os.getenv("TTS_OUTPUT_DIR", "data/tts_audio"),
         tts_cooldown_minutes=_int(os.getenv("TTS_COOLDOWN_MINUTES"), 10),
+        tts_ws_host=os.getenv("TTS_WS_HOST", "0.0.0.0"),
+        tts_ws_port=_int(os.getenv("TTS_WS_PORT"), 8765),
         memory_retention_days=_int(os.getenv("MEMORY_RETENTION_DAYS"), 14),
         dry_run=_bool(os.getenv("DRY_RUN"), True),
         poll_interval_seconds=_int(os.getenv("POLL_INTERVAL_SECONDS"), 30),
@@ -132,4 +136,3 @@ def _normalize_openai_base_url(value: str) -> str:
         if normalized.endswith(suffix):
             return normalized[: -len(suffix)]
     return normalized
-

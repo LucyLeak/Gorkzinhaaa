@@ -19,11 +19,15 @@ Bot em Python para comentários do YouTube com dois cérebros (sério e humorís
 ├── migrations/
 │   └── 001_init.sql                   # Schema SQL para deploy manual
 ├── tools/
-│   └── get_youtube_refresh_token.py   # Gera refresh token OAuth do YouTube
+│   ├── fix_tts_constraint.py
+│   ├── get_youtube_refresh_token.py   # Gera refresh token OAuth do YouTube
+│   └── test_catbox_upload.py
+├── tts-backend/                       # ⚠️ Deprecado — remova em deploy
 └── youtube_bot/
     ├── __init__.py
     ├── config.py                      # Settings via .env
     ├── main.py                        # Entry point do bot
+    ├── tts_ws_server.py               # WebSocket server embutido para TTS
     ├── brains/
     │   ├── base.py                    # Interface abstrata Brain
     │   ├── cerebro_a.py               # Cérebro sério/analítico
@@ -101,6 +105,7 @@ TTS_PROVIDER=gtts                   # "gtts" (gratuito) ou "openai"
 TTS_VOICE=pt                        # gTTS: pt, pt-br, en, es | OpenAI: nova, alloy, echo...
 TTS_OUTPUT_DIR=data/tts_audio       # Diretório de saída dos .mp3
 TTS_COOLDOWN_MINUTES=10             # Intervalo mínimo entre TTS por usuário
+TTS_WS_PORT=8765                    # Porta do WebSocket embutido (0.0.0.0:8765/ws)
 
 # ── Limpeza de dados ──────────────────────────────
 MEMORY_RETENTION_DAYS=14            # Dias para reter dados (padrão: 2 semanas)
@@ -148,7 +153,7 @@ O Neon precisa ter a extensão `vector` habilitada.
 | `respostas_geradas` | Respostas produzidas pelos cérebros, com status de aprovação |
 | `memorias_semanticas` | Embeddings vetoriais (pgvector) para busca semântica de contexto |
 | `configuracoes_cerebro` | Prompts base e pesos de cada cérebro (A e B) |
-| `tts_solicitacoes` | Solicitações de Text-to-Speech com status e URL do áudio |
+| `tts_solicitacoes` | Solicitações de Text-to-Speech com status e URL do áudio (Catbox) |
 | `historico_humor` | Registro de humor dos usuários ao longo do tempo |
 
 ---
@@ -166,6 +171,47 @@ DRY_RUN=false
 ```
 
 > ⚠️ Teste antes com `DRY_RUN=true` para validar o comportamento.
+
+---
+
+## TTS WebSocket Server (embutido)
+
+O bot agora inclui um **servidor WebSocket embutido** (via `aiohttp`) que roda na mesma porta que o bot e pode ser acessado publicamente (ex: via Railway HTTPS proxy).  
+Endereço: `ws://SEU_HOST:8765/ws`
+
+**O que ele faz:**
+- Escuta na interface `0.0.0.0` (porta configurável via `TTS_WS_PORT`)
+- Oferece um endpoint WebSocket em `/ws`
+- Oferece um health check em `/health`
+- A cada 2 segundos, consulta o banco por TTS recém-concluídos
+- Envia o **link do Catbox** (MP3) para todos os clientes conectados
+- Marca o TTS como `reproduzido` no banco
+
+**Payload enviado para o cliente:**
+```json
+{
+  "id": 123,
+  "username": "nome_do_usuario",
+  "message": "texto que foi falado",
+  "type": "url",
+  "audio": "https://files.catbox.moe/abc123.mp3"
+}
+```
+
+**Cliente de exemplo (JavaScript):**
+```js
+const ws = new WebSocket('wss://seudominio.com/ws');
+ws.onmessage = (e) => {
+  const d = JSON.parse(e.data);
+  if (d.type === "url") {
+    const audio = new Audio(d.audio);
+    audio.play();
+  }
+};
+```
+
+> **Nota:** O antigo servidor Bun (`tts-backend/`) foi substituído e não é mais necessário.   
+> Mantenha-o apenas como referência.
 
 ---
 
@@ -317,12 +363,13 @@ graph TD
     E --> F[Cria cérebros A e B]
     F --> G[Cria Director + trivia + giphy]
     G --> H[Cria YouTubeClient + LiveChatClient]
-    H --> I[cleanup_on_startup: remove dados > 14 dias]
-    I --> J{YOUTUBE_CHANNEL_HANDLE?}
-    J -->|Sim| K[resolve_channel_id: @handle → channel_id]
-    J -->|Não| L[Loop principal]
-    K --> L
-    L --> M[Ciclo: discover lives + poll comments + sleep 30s]
+    H --> I[cleanup_on_startup]
+    I --> J[Inicia TTS WebSocket server embutido]
+    J --> K{YOUTUBE_CHANNEL_HANDLE?}
+    K -->|Sim| L[resolve_channel_id]
+    K -->|Não| M[Loop principal]
+    L --> M
+    M --> N[Ciclo: discover lives + poll comments + sleep 30s]
 ```
 
 ---
@@ -330,7 +377,7 @@ graph TD
 ## Dependências
 
 ```
-aiohttp>=3.9.5          # HTTP assíncrono (Giphy, etc.)
+aiohttp>=3.9.5          # HTTP assíncrono (Giphy, WebSocket server)
 asyncpg>=0.29.0         # Driver PostgreSQL assíncrono
 google-api-python-client>=2.137.0  # YouTube Data API v3
 google-auth>=2.32.0
@@ -351,11 +398,8 @@ scikit-learn>=1.5.1     # Similaridade de cosseno
 
 | Feature | Arquivos |
 |---|---|
-| **Comando `!tts`** — Text-to-Speech com gTTS/OpenAI | `fun/tts.py` (novo), `brains/diretor.py`, `config.py` |
-| **Tabela `tts_solicitacoes`** — Rastreamento de TTS no banco | `db/models.py`, `migrations/001_init.sql` |
-| **Rate limit por usuário** — 1 TTS a cada 10 min (configurável) | `fun/tts.py`, `db/models.py`, `config.py` |
-| **Limpeza de dados antigos** — Remove registros > 14 dias na inicialização | `memory/cleanup.py` (novo), `db/models.py`, `main.py`, `config.py` |
-| **Índices para limpeza** — `idx_mensagens_timestamp`, `idx_respostas_timestamp`, `idx_tts_criado_em`, `idx_memorias_criado_em` | `db/models.py`, `migrations/001_init.sql` |
+| **WebSocket server embutido** no Python (substitui Bun) | `tts_ws_server.py` (novo), `main.py`, `config.py` |
+| **Config `TTS_WS_PORT`** | `config.py`, `.env.example` |
 | **Cache de áudio TTS** — Reutiliza .mp3 se mesmo texto já foi gerado | `fun/tts.py` |
 | **Sanitização de texto TTS** — Remove caracteres perigosos, limita 300 chars | `fun/tts.py` |
 | **Modo Canal (Live Detection)** — Detecta lives automaticamente pelo @handle | `youtube/client.py`, `main.py`, `config.py` |
@@ -363,25 +407,8 @@ scikit-learn>=1.5.1     # Similaridade de cosseno
 | **`get_active_lives`** — Busca lives ativas com liveChatId | `youtube/client.py` |
 | **`poll_live_chat`** — Loop de chat ao vivo com reconexão automática | `main.py` |
 
-### Alterado
-
-| Arquivo | Mudança |
-|---|---|
-| `config.py` | +5 campos: `tts_provider`, `tts_voice`, `tts_output_dir`, `tts_cooldown_minutes`, `memory_retention_days`, `youtube_channel_handle` |
-| `db/models.py` | +tabela `tts_solicitacoes`, +4 índices, +funções `insert_tts_request`, `update_tts_status`, `get_tts_request`, `get_last_tts_time`, `cleanup_old_data` |
-| `brains/diretor.py` | +import `handle_tts_command`, +handler no `_maybe_handle_fun` |
-| `main.py` | Reescrito: +live detection, +`LiveChatClient`, +`discover_and_connect_lives`, +`poll_live_chat`, +`process_live_message` |
-| `youtube/client.py` | +`resolve_channel_id`, +`get_active_lives`, +`_search_channel_by_handle`, +`_search_active_lives` |
-| `migrations/001_init.sql` | +tabela `tts_solicitacoes`, +4 índices de limpeza |
-| `requirements.txt` | +`gtts>=2.5.0` |
-| `.gitignore` | +`data/tts_audio/` |
-| `.env.example` | +`YOUTUBE_CHANNEL_HANDLE`, +TTS settings, +`MEMORY_RETENTION_DAYS` |
-
 ### Removido
 
 | O que | Motivo |
 |---|---|
-| `MemoryCleanupScheduler` (classe com loop infinito) | Substituído por `cleanup_on_startup()` — execução única na inicialização, sem task em background |
-| `YOUTUBE_VIDEO_IDS` obrigatório | Agora opcional — o bot funciona só com `YOUTUBE_CHANNEL_HANDLE` |
-#   G o r k z i n h a a a  
- 
+| Servidor Bun (`tts-backend/`) como dependência ativa | Substituído pelo WebSocket embutido no Python (público via HTTPS do deploy) |

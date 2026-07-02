@@ -5,7 +5,6 @@ import postgres from "postgres";
 const PORT = parseInt(process.env.TTS_BACKEND_PORT || "3000");
 const DATABASE_URL = process.env.DATABASE_URL;
 const POLL_INTERVAL_MS = parseInt(process.env.TTS_POLL_INTERVAL_MS || "2000");
-const AUDIO_BASE_DIR = process.env.TTS_AUDIO_DIR || "../data/tts_audio";
 
 if (!DATABASE_URL) {
   console.error("❌ DATABASE_URL not set. Copy .env.example or set the variable.");
@@ -45,30 +44,15 @@ async function pollTtsQueue(): Promise<void> {
     `;
 
     for (const row of rows) {
-      let audioPayload: string;
-
-      if (row.audio_url.startsWith("https://")) {
-        // Catbox URL — send directly
-        audioPayload = row.audio_url;
-      } else {
-        // Local path fallback — read file and encode as base64
-        const filename = row.audio_url.split("/").pop() || row.audio_url.split("\\").pop() || row.audio_url;
-        const audioPath = `${AUDIO_BASE_DIR}/${filename}`;
-        try {
-          const audioFile = Bun.file(audioPath);
-          const audioBytes = await audioFile.arrayBuffer();
-          audioPayload = Buffer.from(audioBytes).toString("base64");
-        } catch {
-          console.error(`Failed to read audio file: ${audioPath}`);
-          continue;
-        }
-      }
-
+      // The Python bot always uploads to Catbox.moe and stores the HTTPS URL,
+      // then deletes the local MP3 file. The WebSocket payload sends the
+      // Catbox URL directly with type "url" so clients can fetch it.
       const payload = JSON.stringify({
         id: row.id,
         username: row.autor,
         message: row.texto_falado,
-        audio: audioPayload,
+        type: "url",
+        audio: row.audio_url,
       });
 
       // Broadcast to all connected WebSocket clients
@@ -103,7 +87,7 @@ Bun.serve({
       if (!upgraded) {
         return new Response("WebSocket upgrade failed", { status: 426 });
       }
-      return undefined; // Bun handles the upgrade
+      return undefined;
     }
 
     // Health check
@@ -137,7 +121,7 @@ Bun.serve({
 
 console.log(`🚀 Gork TTS Backend running on http://localhost:${PORT}`);
 console.log(`   WebSocket: ws://localhost:${PORT}/ws`);
-console.log(`   Audio via base64 (no static serving needed)`);
+console.log(`   Sending Catbox URLs (type="url") — no local audio serving`);
 console.log(`   Polling every ${POLL_INTERVAL_MS}ms`);
 
 // ─── Start poller ─────────────────────────────────────────────────────────────

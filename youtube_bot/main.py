@@ -18,6 +18,7 @@ from youtube_bot.fun.trivia import TriviaGame
 from youtube_bot.memory.cleanup import cleanup_on_startup
 from youtube_bot.memory.consolidator import MemoryConsolidator
 from youtube_bot.memory.vector_store import VectorMemoryStore
+from youtube_bot.tts_ws_server import TtsWebSocketServer
 from youtube_bot.utils.helpers import extract_youtube_video_id, utc_now
 from youtube_bot.utils.logger import configure_logging
 from youtube_bot.validation.validator import Validator
@@ -91,6 +92,15 @@ async def main() -> None:
 
     # Limpeza unica de dados antigos na inicializacao
     await cleanup_on_startup(db, settings.memory_retention_days)
+
+    # ── TTS WebSocket server (embedded, reachable publicly) ──────
+    tts_ws = TtsWebSocketServer(
+        db=db,
+        host=settings.tts_ws_host,
+        port=settings.tts_ws_port,
+        poll_interval=2.0,
+    )
+    await tts_ws.start()
 
     # ── Resolver channel ID a partir do @handle ──────────────────────
     live_video_id: str | None = None
@@ -167,6 +177,7 @@ async def main() -> None:
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Bot encerrado pelo usuario (Ctrl+C).")
     finally:
+        await tts_ws.stop()
         await db.close()
 
 
