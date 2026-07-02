@@ -137,10 +137,21 @@ async def main() -> None:
     live_discovery_enabled = True
 
     if not live_video_id and not channel_id and not settings.youtube_video_ids:
-        raise RuntimeError(
-            "Configure YOUTUBE_LIVE_URL, YOUTUBE_CHANNEL_HANDLE (@canal) ou "
-            "YOUTUBE_VIDEO_IDS com um ou mais IDs separados por virgula."
+        logger.warning(
+            "Nenhuma fonte do YouTube configurada. "
+            "O TTS WebSocket server continuara rodando em ws://%s:%s/ws. "
+            "Para ativar o YouTube, configure YOUTUBE_LIVE_URL, "
+            "YOUTUBE_CHANNEL_HANDLE ou YOUTUBE_VIDEO_IDS.",
+            settings.tts_ws_host,
+            settings.tts_ws_port,
         )
+        # Keep the bot alive with just the WS server running
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+        return
 
     try:
         while True:
