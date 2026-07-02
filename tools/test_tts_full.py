@@ -69,6 +69,16 @@ async def main() -> None:
         user_id = int(user["id"])
         print(f"   ✅ Usuário: id={user_id}, nome={user['nome']}")
 
+        # ── 2.5. Limpar TTS antigos do usuário de teste ─────────────
+        deleted_tag = await db.execute(
+            "DELETE FROM tts_solicitacoes WHERE usuario_id = $1",
+            user_id,
+        )
+        # asyncpg execute returns a command tag like "DELETE 3"
+        deleted_count = int(deleted_tag.split()[-1]) if deleted_tag.split()[-1].isdigit() else 0
+        if deleted_count:
+            print(f"   🧹 {deleted_count} registro(s) TTS antigo(s) removido(s)")
+
         # ── 3. Subir servidor WebSocket local ───────────────────────
         print()
         print("=" * 60)
