@@ -75,7 +75,9 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    load_dotenv()
+    # Only load .env if it exists (for local development)
+    # Railway environment variables are already in os.environ
+    load_dotenv(override=False)
 
     return Settings(
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
@@ -130,3 +132,4 @@ def _normalize_openai_base_url(value: str) -> str:
         if normalized.endswith(suffix):
             return normalized[: -len(suffix)]
     return normalized
+
