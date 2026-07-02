@@ -17,7 +17,8 @@ Bot em Python para comentários do YouTube com dois cérebros (sério e humorís
 │   ├── trivia_questions.json          # Perguntas do quiz
 │   └── tts_audio/                     # Áudios TTS gerados (gitignored)
 ├── migrations/
-│   └── 001_init.sql                   # Schema SQL para deploy manual
+│   ├── 001_init.sql                   # Schema SQL inicial
+│   └── 002_tts_approval.sql           # Coluna aprovado na tabela TTS
 ├── tools/
 │   ├── fix_tts_constraint.py
 │   ├── get_youtube_refresh_token.py   # Gera refresh token OAuth do YouTube
@@ -25,22 +26,24 @@ Bot em Python para comentários do YouTube com dois cérebros (sério e humorís
 ├── tts-backend/                       # ⚠️ Deprecado — remova em deploy
 └── youtube_bot/
     ├── __init__.py
+    ├── admin_panel.py                 # Painel admin web (config, TTS queue, limpeza, terminal)
     ├── config.py                      # Settings via .env
     ├── main.py                        # Entry point do bot
-    ├── tts_ws_server.py               # WebSocket server embutido para TTS
+    ├── tts_ws_server.py               # WebSocket server embutido para TTS + admin
     ├── brains/
     │   ├── base.py                    # Interface abstrata Brain
-    │   ├── cerebro_a.py               # Cérebro sério/analítico
-    │   ├── cerebro_b.py               # Cérebro humorístico
+    │   ├── cerebro_a.py               # Cérebro sério/analítico (temp 0.3)
+    │   ├── cerebro_b.py               # Cérebro humorístico (temp 0.9)
     │   └── diretor.py                 # Orquestrador: escolhe cérebro, valida, responde
     ├── db/
     │   ├── pool.py                    # Pool de conexões asyncpg (Neon)
     │   └── models.py                  # Schema + funções CRUD
     ├── fun/
+    │   ├── audio_cleanup.py           # Limpeza de arquivos de áudio TTS
     │   ├── challenges.py              # Comandos: espelho, rima, emoji
     │   ├── giphy.py                   # Cliente da API Giphy
     │   ├── trivia.py                  # Jogo de quiz (!quiz / !resposta)
-    │   └── tts.py                     # Comando !tts (Text-to-Speech)
+    │   └── tts.py                     # Comando !tts (Text-to-Speech + Catbox fallback)
     ├── memory/
     │   ├── consolidator.py            # Consolida memórias episódicas em fatos
     │   ├── vector_store.py            # Embeddings + busca vetorial (pgvector)
@@ -392,14 +395,87 @@ scikit-learn>=1.5.1     # Similaridade de cosseno
 
 ---
 
+## Admin Panel
+
+Acessível em `/admin?token=SEU_ADMIN_TOKEN` no servidor do bot.
+
+### Abas
+
+| Aba | Funcionalidade |
+|---|---|
+| **⚙️ Configurações** | Editar 18 variáveis de ambiente em runtime (API keys, modelos, TTS, etc.) |
+| **🎙️ Fila TTS** | Aprovar ou rejeitar áudios TTS enviados por usuários |
+| **🗑️ Limpeza** | Ver estatísticas de áudio e executar limpeza (dry-run ou real) |
+| **💻 Terminal** | Executar queries SQL (SELECT/WITH/EXPLAIN/SHOW) diretamente no banco |
+
+### Segurança
+
+- Protegido por `ADMIN_TOKEN` (obrigatório como query param `?token=...`)
+- Terminal SQL só permite queries de leitura (SELECT, WITH, EXPLAIN, SHOW)
+- Rate limit de 200 linhas por query
+
+### Configuração
+
+```env
+ADMIN_TOKEN=seu_token_secreto_aqui
+```
+
+---
+
+## Limpeza de Áudios TTS
+
+Sistema de limpeza automática de arquivos `.mp3` no diretório `data/tts_audio/`.
+
+### Estratégia (2 passos)
+
+1. **Por idade**: Remove arquivos mais antigos que `max_age_hours` (padrão: 24h)
+2. **Por tamanho**: Se ainda estiver acima de `max_total_mb` (padrão: 200MB), remove os maiores arquivos até atingir o limite
+
+Sempre mantém pelo menos `min_keep` arquivos (padrão: 10).
+
+### Uso
+
+```python
+from youtube_bot.fun.audio_cleanup import cleanup_audio_files
+
+result = cleanup_audio_files(
+    audio_dir="data/tts_audio",
+    max_age_hours=24,
+    max_total_mb=200,
+    min_keep=10,
+    dry_run=True,  # True = simular, False = executar
+)
+# Retorna: {"deleted": 5, "freed_mb": 12.3, "remaining_files": 42, "remaining_mb": 87.5}
+```
+
+Também disponível via Admin Panel → aba **🗑️ Limpeza**.
+
+---
+
+## Catbox Fallback
+
+O upload de áudio TTS para o Catbox.moe tem resiliência integrada:
+
+1. **Tentativa 1**: Upload para Catbox.moe
+2. **Tentativa 2** (retry): Se falhar, tenta novamente após 2s
+3. **Fallback local**: Se ambas falharem, serve o arquivo via `/audio/nome.mp3` no próprio servidor
+
+Isso garante que o TTS sempre funcione, mesmo se o Catbox estiver offline.
+
+---
+
 ## Resumo de Alterações Recentes
 
 ### Adicionado
 
 | Feature | Arquivos |
 |---|---|
-| **WebSocket server embutido** no Python (substitui Bun) | `tts_ws_server.py` (novo), `main.py`, `config.py` |
-| **Config `TTS_WS_PORT`** | `config.py`, `.env.example` |
+| **Admin Panel** — Painel web com 4 abas (config, TTS queue, limpeza, terminal) | `admin_panel.py` (novo) |
+| **Limpeza de áudios** — Remove arquivos antigos priorizando maiores | `fun/audio_cleanup.py` (novo) |
+| **Coluna `aprovado`** — Tabela `tts_solicitacoes` com aprovação/rejeição | `migrations/002_tts_approval.sql` (novo) |
+| **Catbox retry + fallback** — 2 tentativas + URL local se Catbox offline | `fun/tts.py` |
+| **WebSocket server embutido** no Python (substitui Bun) | `tts_ws_server.py`, `main.py`, `config.py` |
+| **Config `TTS_WS_PORT`** e `PUBLIC_BASE_URL` | `config.py`, `.env.example` |
 | **Cache de áudio TTS** — Reutiliza .mp3 se mesmo texto já foi gerado | `fun/tts.py` |
 | **Sanitização de texto TTS** — Remove caracteres perigosos, limita 300 chars | `fun/tts.py` |
 | **Modo Canal (Live Detection)** — Detecta lives automaticamente pelo @handle | `youtube/client.py`, `main.py`, `config.py` |

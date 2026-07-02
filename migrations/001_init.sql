@@ -135,6 +135,7 @@ CREATE TABLE IF NOT EXISTS tts_solicitacoes (
     audio_url TEXT,
     status TEXT NOT NULL DEFAULT 'pendente' 
         CHECK (status IN ('pendente', 'processando', 'concluido', 'erro', 'reproduzido')),
+    aprovado BOOLEAN DEFAULT NULL,
     erro TEXT,
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
     concluido_em TIMESTAMPTZ

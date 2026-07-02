@@ -11,6 +11,7 @@ from aiohttp import web
 
 from youtube_bot.db import models
 from youtube_bot.db.pool import Database
+from youtube_bot.admin_panel import AdminPanel
 
 if TYPE_CHECKING:
     from youtube_bot.config import Settings
@@ -58,6 +59,10 @@ class TtsWebSocketServer:
         self._app.router.add_get("/tts-test", self._handle_tts_test)
         # Serve local TTS audio files as fallback when Catbox is down
         self._app.router.add_static("/audio/", self._audio_dir, show_index=False)
+
+        # Admin panel (runtime settings, TTS approval, cleanup, terminal)
+        self._admin = AdminPanel(db=self.db, settings=self.settings)
+        self._admin.register_routes(self._app)
 
     async def start(self) -> None:
         """Start the HTTP server and the DB poller background task."""

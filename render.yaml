@@ -63,5 +63,7 @@ services:
         sync: false
       - key: LOG_LEVEL
         sync: false
+      - key: ADMIN_TOKEN
+        sync: false
       - key: MEMORY_RETENTION_DAYS
         sync: false
