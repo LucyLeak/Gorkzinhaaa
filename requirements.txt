@@ -1,0 +1,11 @@
+aiohttp>=3.9.5
+asyncpg>=0.29.0
+google-api-python-client>=2.137.0
+google-auth>=2.32.0
+google-auth-oauthlib>=1.2.1
+numpy>=1.26.4
+openai>=1.40.0
+pgvector>=0.3.2
+python-dotenv>=1.0.1
+scikit-learn>=1.5.1
+gtts>=2.5.0

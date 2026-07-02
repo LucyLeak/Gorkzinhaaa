@@ -1,0 +1,17 @@
+[
+  {
+    "question": "Qual API do Google e usada para ler comentarios do YouTube?",
+    "answer": "YouTube Data API",
+    "points": 2
+  },
+  {
+    "question": "Qual extensao do PostgreSQL permite busca vetorial neste projeto?",
+    "answer": "pgvector",
+    "points": 2
+  },
+  {
+    "question": "Quantos cerebros principais este bot usa?",
+    "answer": "dois",
+    "points": 1
+  }
+]
