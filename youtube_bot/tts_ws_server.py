@@ -46,6 +46,10 @@ class TtsWebSocketServer:
         self._poll_task: asyncio.Task[None] | None = None
         self._site: web.TCPSite | None = None
 
+        # Ensure the TTS audio directory exists (needed for static route and TTS generation)
+        self._audio_dir = Path("data/tts_audio")
+        self._audio_dir.mkdir(parents=True, exist_ok=True)
+
         # Routes
         self._app.router.add_get("/", self._handle_health)
         self._app.router.add_get("/ws", self._handle_websocket)
@@ -53,7 +57,7 @@ class TtsWebSocketServer:
         self._app.router.add_get("/pending-tts", self._handle_pending_tts)
         self._app.router.add_get("/tts-test", self._handle_tts_test)
         # Serve local TTS audio files as fallback when Catbox is down
-        self._app.router.add_static("/audio/", Path("data/tts_audio"), show_index=False)
+        self._app.router.add_static("/audio/", self._audio_dir, show_index=False)
 
     async def start(self) -> None:
         """Start the HTTP server and the DB poller background task."""
