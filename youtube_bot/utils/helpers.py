@@ -55,3 +55,21 @@ def _valid_video_id(value: str | None) -> str | None:
     if value and re.fullmatch(r"[A-Za-z0-9_-]{11}", value):
         return value
     return None
+
+
+def parse_thinking_response(text: str) -> tuple[str, str]:
+    """
+    Parses a response that may contain <think>...</think> tags.
+
+    Returns:
+        A tuple of (thought, message).
+        If no tags are found, thought is an empty string and message is the original text.
+    """
+    if not text:
+        return "", ""
+    match = re.search(r"<think>(.*?)</think>", text, re.DOTALL | re.IGNORECASE)
+    if match:
+        thought = match.group(1).strip()
+        message = text.replace(match.group(0), "").strip()
+        return thought, message
+    return "", text

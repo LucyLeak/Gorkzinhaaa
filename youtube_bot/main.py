@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import ssl
 from pathlib import Path
 
@@ -19,7 +20,11 @@ from youtube_bot.memory.cleanup import cleanup_on_startup
 from youtube_bot.memory.consolidator import MemoryConsolidator
 from youtube_bot.memory.vector_store import VectorMemoryStore
 from youtube_bot.tts_ws_server import TtsWebSocketServer
-from youtube_bot.utils.helpers import extract_youtube_video_id, utc_now
+from youtube_bot.utils.helpers import (
+    extract_youtube_video_id,
+    utc_now,
+    parse_thinking_response,
+)
 from youtube_bot.utils.logger import configure_logging
 from youtube_bot.validation.validator import Validator
 from youtube_bot.youtube.client import (
@@ -396,7 +401,17 @@ async def process_live_message(
             display_name=message.author_name,
             message_type="live",
         )
-        await live_client.post_message(live_chat_id, reply.text)
+        thought, message_text = parse_thinking_response(reply.text)
+        if thought:
+            logger.info("Pensamento do bot: %s", thought)
+
+        if not message_text:
+            logger.warning(
+                "A resposta do bot ficou vazia apos remover o pensamento. Nao sera enviada."
+            )
+            return
+
+        await live_client.post_message(live_chat_id, message_text)
         logger.info(
             "Live %s: respondido com %s.",
             live_chat_id,
@@ -423,16 +438,38 @@ async def poll_video_comments(
             logger.exception("Falha ao buscar comentarios do video %s.", video_id)
             continue
 
-        if not comments:
+        if not comments:  # No new comments at all
             continue
 
-        for comment in comments:
-            if bot_channel_id and comment.author_channel_id == bot_channel_id:
-                continue
-            await process_comment(youtube_client, director, comment)
-
+        # Always update last_seen to the newest comment to avoid reprocessing
         newest = max(comment.published_at for comment in comments)
         last_seen_by_video[video_id] = max(last_seen, newest)
+
+        # Filter out bot's own comments
+        user_comments = [
+            c for c in comments
+            if not (bot_channel_id and c.author_channel_id == bot_channel_id)
+        ]
+
+        if not user_comments:
+            logger.info("Video %s: %d novos comentarios encontrados, mas nenhum de usuario.", video_id, len(comments))
+            continue
+
+        # Take the 5 most recent user comments
+        # Comments are sorted oldest to newest, so we take the tail.
+        candidates = user_comments[-5:]
+        comment_to_reply = random.choice(candidates)
+
+        logger.info(
+            "Video %s: %d novos comentarios de usuario. Escolhido aleatoriamente o comentario %s para responder (de %d candidatos).",
+            video_id,
+            len(user_comments),
+            comment_to_reply.comment_id,
+            len(candidates),
+        )
+
+        # Process only the selected comment
+        await process_comment(youtube_client, director, comment_to_reply)
 
 
 async def process_comment(
@@ -447,7 +484,16 @@ async def process_comment(
             display_name=comment.author_name,
             message_type="comment",
         )
-        await youtube_client.post_reply(comment.comment_id, reply.text)
+        thought, message_text = parse_thinking_response(reply.text)
+        if thought:
+            logger.info("Pensamento do bot: %s", thought)
+
+        if not message_text:
+            logger.warning(
+                "A resposta do bot ficou vazia apos remover o pensamento. Nao sera enviada."
+            )
+            return
+        await youtube_client.post_reply(comment.comment_id, message_text)
         logger.info(
             "Comentario %s respondido com %s.",
             comment.comment_id,

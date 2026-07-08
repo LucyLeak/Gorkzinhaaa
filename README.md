@@ -1,6 +1,6 @@
 # YouTube Two-Brain Bot
 
-Bot em Python para comentários do YouTube com dois cérebros (sério e humorístico), Diretor com validação e loop de reparo, memória vetorial no Neon/pgvector, comandos interativos, TTS (Text-to-Speech), e limpeza automática de dados antigos.
+Bot em Python para comentários do YouTube.
 
 ---
 
