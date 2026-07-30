@@ -48,7 +48,7 @@ class TtsWebSocketServer:
         self._site: web.TCPSite | None = None
 
         # Ensure the TTS audio directory exists (needed for static route and TTS generation)
-        self._audio_dir = Path("data/tts_audio")
+        self._audio_dir = Path(settings.tts_output_dir if settings else "data/tts_audio")
         self._audio_dir.mkdir(parents=True, exist_ok=True)
 
         # Routes
@@ -186,13 +186,6 @@ class TtsWebSocketServer:
 
             audio_path = await generate_tts(texto_falado, self.settings, self.db, user_id=sys_user_id, voice=voice)
             public_url = await upload_tts_audio(audio_path, self.settings)
-
-            # Only delete local file if uploaded to Catbox (not local fallback)
-            if public_url and "catbox.moe" in public_url:
-                try:
-                    Path(audio_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
 
             if public_url:
                 await models.update_tts_status(self.db, tts_id, "concluido", audio_url=public_url)

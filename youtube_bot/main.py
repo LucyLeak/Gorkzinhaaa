@@ -23,7 +23,7 @@ from youtube_bot.tts_ws_server import TtsWebSocketServer
 from youtube_bot.utils.helpers import (
     extract_youtube_video_id,
     utc_now,
-    parse_thinking_response,
+    prepare_chat_message,
 )
 from youtube_bot.utils.logger import configure_logging
 from youtube_bot.validation.validator import Validator
@@ -401,7 +401,7 @@ async def process_live_message(
             display_name=message.author_name,
             message_type="live",
         )
-        thought, message_text = parse_thinking_response(reply.text)
+        thought, message_text = prepare_chat_message(reply.text)
         if thought:
             logger.info("Pensamento do bot: %s", thought)
 
@@ -484,7 +484,7 @@ async def process_comment(
             display_name=comment.author_name,
             message_type="comment",
         )
-        thought, message_text = parse_thinking_response(reply.text)
+        thought, message_text = prepare_chat_message(reply.text)
         if thought:
             logger.info("Pensamento do bot: %s", thought)
 

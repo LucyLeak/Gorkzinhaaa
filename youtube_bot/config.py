@@ -50,6 +50,10 @@ class Settings:
     giphy_api_key: str
     tts_provider: str
     tts_voice: str
+    elevenlabs_api_key: str
+    elevenlabs_voice_id: str
+    elevenlabs_model_id: str
+    elevenlabs_output_format: str
     tts_output_dir: str
     tts_cooldown_minutes: int
     tts_ws_host: str
@@ -108,8 +112,18 @@ def load_settings() -> Settings:
             "Bot conectada ao chat ao vivo.",
         ),
         giphy_api_key=os.getenv("GIPHY_API_KEY", ""),
-        tts_provider=os.getenv("TTS_PROVIDER", "gtts"),
+        tts_provider=os.getenv("TTS_PROVIDER", "gtts").strip().lower(),
         tts_voice=os.getenv("TTS_VOICE", "pt"),
+        elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
+        elevenlabs_voice_id=os.getenv(
+            "ELEVENLABS_VOICE_ID",
+            "JBFqnCBsd6RMkjVDRZzb",
+        ),
+        elevenlabs_model_id=os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
+        elevenlabs_output_format=os.getenv(
+            "ELEVENLABS_OUTPUT_FORMAT",
+            "mp3_44100_128",
+        ),
         tts_output_dir=os.getenv("TTS_OUTPUT_DIR", "data/tts_audio"),
         tts_cooldown_minutes=_int(os.getenv("TTS_COOLDOWN_MINUTES"), 10),
         tts_ws_host=os.getenv("TTS_WS_HOST", "0.0.0.0"),

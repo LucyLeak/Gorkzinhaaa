@@ -7,6 +7,17 @@ from urllib.parse import parse_qs, urlparse
 
 QUESTION_KEYWORDS = {"explica", "explique", "porque", "por que", "como", "qual"}
 HUMOR_KEYWORDS = {"piada", "engracado", "engracada", "meme", "zoa", "zueira"}
+MAX_CHAT_MESSAGE_CHARS = 150
+_THINK_TAG_NAMES = "think|thinking|thought|analysis"
+_THINK_BLOCK_PATTERN = re.compile(
+    rf"<(?:{_THINK_TAG_NAMES})\b[^>]*>(.*?)</(?:{_THINK_TAG_NAMES})>",
+    re.DOTALL | re.IGNORECASE,
+)
+_UNCLOSED_THINK_PATTERN = re.compile(
+    rf"<(?:{_THINK_TAG_NAMES})\b[^>]*>.*$",
+    re.DOTALL | re.IGNORECASE,
+)
+_WHITESPACE_PATTERN = re.compile(r"\s+")
 
 
 def normalize_text(text: str) -> str:
@@ -67,9 +78,33 @@ def parse_thinking_response(text: str) -> tuple[str, str]:
     """
     if not text:
         return "", ""
-    match = re.search(r"<think>(.*?)</think>", text, re.DOTALL | re.IGNORECASE)
-    if match:
-        thought = match.group(1).strip()
-        message = text.replace(match.group(0), "").strip()
-        return thought, message
-    return "", text
+
+    thoughts = [match.group(1).strip() for match in _THINK_BLOCK_PATTERN.finditer(text)]
+    message = _THINK_BLOCK_PATTERN.sub("", text)
+
+    unclosed = _UNCLOSED_THINK_PATTERN.search(message)
+    if unclosed:
+        thoughts.append(unclosed.group(0).strip())
+        message = message[: unclosed.start()]
+
+    return "\n\n".join(part for part in thoughts if part), message.strip()
+
+
+def limit_chat_message(text: str, max_chars: int = MAX_CHAT_MESSAGE_CHARS) -> str:
+    """Normaliza e limita a mensagem que sera enviada ao YouTube."""
+    message = _WHITESPACE_PATTERN.sub(" ", text).strip()
+    if len(message) <= max_chars:
+        return message
+
+    suffix = "..."
+    cutoff = max_chars - len(suffix)
+    truncated = message[:cutoff].rsplit(" ", 1)[0].rstrip(" .,;:-")
+    if len(truncated) < max_chars // 2:
+        truncated = message[:cutoff].rstrip(" .,;:-")
+    return f"{truncated}{suffix}"
+
+
+def prepare_chat_message(text: str, max_chars: int = MAX_CHAT_MESSAGE_CHARS) -> tuple[str, str]:
+    """Remove thinking e retorna (thought, mensagem_final) pronta para chat."""
+    thought, message = parse_thinking_response(text)
+    return thought, limit_chat_message(message, max_chars)

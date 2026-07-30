@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from youtube_bot.utils.helpers import MAX_CHAT_MESSAGE_CHARS, prepare_chat_message
+
 
 class ChatClient(Protocol):
     chat: object
@@ -28,6 +30,14 @@ class Brain:
 
         messages = [
             {"role": "system", "content": self.prompt_base},
+            {
+                "role": "system",
+                "content": (
+                    "A resposta publica enviada ao chat deve ter no maximo "
+                    f"{MAX_CHAT_MESSAGE_CHARS} caracteres. Se usar <think>...</think>, "
+                    "esse bloco sera removido antes de enviar; deixe a resposta final fora dele."
+                ),
+            },
             {
                 "role": "system",
                 "content": "Contexto recuperado da memoria: "
@@ -66,5 +76,7 @@ class Brain:
     def _dry_answer(self, user_message: str, feedback: str | None = None) -> str:
         suffix = f" Ajuste solicitado: {feedback}" if feedback else ""
         if self.name == "cerebro_b":
-            return f"Modo teste: eu responderia isso com humor leve: {user_message[:180]}{suffix}"
-        return f"Modo teste: resposta objetiva para: {user_message[:180]}{suffix}"
+            answer = f"Modo teste: humor leve para: {user_message}{suffix}"
+        else:
+            answer = f"Modo teste: resposta objetiva para: {user_message}{suffix}"
+        return prepare_chat_message(answer)[1]

@@ -71,23 +71,12 @@ async def main() -> None:
     print()
 
     try:
-        # generate_tts precisa de um db e user_id, mas só usamos para
-        # o caminho do arquivo — passamos valores dummy
         output_dir = Path(settings.tts_output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Chamada direta à função interna para evitar dependência de DB
-        from youtube_bot.fun.tts import _generate_gtts, _text_hash
-
-        file_hash = _text_hash(frase)
-        file_path = output_dir / f"tts_test_{file_hash}.mp3"
-
-        if settings.tts_provider == "openai":
-            from youtube_bot.fun.tts import _generate_openai_tts
-
-            audio_path = await _generate_openai_tts(frase, file_path, settings)
-        else:
-            audio_path = await _generate_gtts(frase, file_path, settings)
+        # generate_tts nao usa o banco atualmente, entao None e suficiente
+        # para testar o mesmo caminho de provider/cache usado pelo bot.
+        audio_path = await generate_tts(frase, settings, db=None, user_id=0)  # type: ignore[arg-type]
 
         print(f"  ✅ Áudio gerado com sucesso!")
         print(f"  📁 Arquivo: {audio_path}")

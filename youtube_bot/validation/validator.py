@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from youtube_bot.brains.base import Brain
 from youtube_bot.memory.vector_store import VectorMemoryStore
+from youtube_bot.utils.helpers import MAX_CHAT_MESSAGE_CHARS, parse_thinking_response
 from youtube_bot.validation.metrics import cosine_similarity
 
 
@@ -54,20 +55,22 @@ class Validator:
 
     async def validate(self, question: str, answer: str, brain_name: str) -> list[str]:
         reasons: list[str] = []
-        lower = answer.lower()
+        _, public_answer = parse_thinking_response(answer)
+        public_answer = public_answer.strip()
+        lower = public_answer.lower()
 
         if any(word and word in lower for word in self.forbidden_words):
             reasons.append("conteudo bloqueado por palavra proibida")
-        if len(answer.strip()) < 10:
+        if len(public_answer) < 10:
             reasons.append("resposta muito curta")
-        if len(answer) > 500:
-            reasons.append("resposta acima de 500 caracteres")
+        if len(public_answer) > MAX_CHAT_MESSAGE_CHARS:
+            reasons.append(f"resposta acima de {MAX_CHAT_MESSAGE_CHARS} caracteres")
 
-        coherence = await self._coherence(question, answer)
+        coherence = await self._coherence(question, public_answer)
         if coherence is not None and coherence < self.coherence_threshold:
             reasons.append(f"baixa coerencia semantica ({coherence:.2f})")
 
-        reasons.extend(self._personality_reasons(answer, brain_name))
+        reasons.extend(self._personality_reasons(public_answer, brain_name))
         return reasons
 
     async def _coherence(self, question: str, answer: str) -> float | None:

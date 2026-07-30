@@ -16,16 +16,42 @@ logger = logging.getLogger(__name__)
 
 # Limite de caracteres por solicitacao TTS (evita abuso)
 MAX_TTS_CHARS = 300
-# Caracteres permitidos no texto (alfanumerico, pontuacao basica, espaco, acentos)
-_TTS_SAFE_PATTERN = re.compile(r"[^a-zA-Z0-9áàâãéèêíìóòôõúùûçÁÀÂÃÉÈÊÍÌÓÒÔÕÚÙÛÇ\s.,!?;:\-()\"'@#&%$+=*/<>\[\]{}|~^_]")
+SUPPORTED_TTS_PROVIDERS = {"gtts", "edge", "edge-tts", "edge_tts", "openai", "elevenlabs"}
+# Caracteres removidos do texto falado (controle, emojis e simbolos incomuns)
+_TTS_UNSAFE_PATTERN = re.compile(r"[^a-zA-Z0-9À-ÖØ-öø-ÿ\s.,!?;:\-()\"'@#&%$+=*/]")
+_WHITESPACE_PATTERN = re.compile(r"\s+")
 # Prefixo do comando
 TTS_PREFIX = "!tts"
+_TTS_COMMAND_PATTERN = re.compile(r"^\s*!tts(?:\s+(.+))?\s*$", re.IGNORECASE | re.DOTALL)
 CATBOX_UPLOAD_URL = "https://catbox.moe/user/api.php"
+ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
+DEFAULT_ELEVENLABS_VOICE_ID = "JBFqnCBsd6RMkjVDRZzb"
+
+_GTTS_LANG_ALIASES = {
+    "pt": "pt",
+    "pt-br": "pt",
+    "br": "pt",
+    "en": "en",
+    "en-us": "en",
+    "es": "es",
+}
+
+_EDGE_VOICE_ALIASES = {
+    "pt": "pt-BR-FranciscaNeural",
+    "pt-br": "pt-BR-FranciscaNeural",
+    "br": "pt-BR-FranciscaNeural",
+    "pt-br-female": "pt-BR-FranciscaNeural",
+    "pt-br-male": "pt-BR-AntonioNeural",
+    "en": "en-US-AriaNeural",
+    "en-us": "en-US-AriaNeural",
+    "es": "es-ES-ElviraNeural",
+}
 
 
 def sanitize_tts_text(text: str) -> str:
     """Remove caracteres perigosos e limita o tamanho do texto para TTS."""
-    cleaned = _TTS_SAFE_PATTERN.sub("", text.strip())
+    cleaned = _TTS_UNSAFE_PATTERN.sub("", text.strip())
+    cleaned = _WHITESPACE_PATTERN.sub(" ", cleaned).strip()
     if len(cleaned) > MAX_TTS_CHARS:
         cleaned = cleaned[:MAX_TTS_CHARS].rsplit(" ", 1)[0]
     return cleaned
@@ -33,10 +59,10 @@ def sanitize_tts_text(text: str) -> str:
 
 def extract_tts_message(message: str) -> str | None:
     """Extrai a mensagem apos o comando !tts. Retorna None se nao for comando TTS."""
-    normalized = message.strip()
-    if not normalized.lower().startswith(TTS_PREFIX):
+    match = _TTS_COMMAND_PATTERN.match(message)
+    if not match:
         return None
-    text = normalized[len(TTS_PREFIX):].strip()
+    text = (match.group(1) or "").strip()
     if not text:
         return None
     return text
@@ -45,6 +71,39 @@ def extract_tts_message(message: str) -> str | None:
 def _text_hash(text: str) -> str:
     """Gera um hash curto do texto para nome do arquivo."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _normalize_provider(provider: str) -> str:
+    normalized = provider.strip().lower().replace("_", "-")
+    if normalized == "edge-tts":
+        return "edge"
+    return normalized
+
+
+def _provider_or_raise(settings: Settings) -> str:
+    provider = _normalize_provider(settings.tts_provider or "gtts")
+    if provider not in {"gtts", "edge", "openai", "elevenlabs"}:
+        allowed = ", ".join(("gtts", "edge", "elevenlabs", "openai"))
+        raise ValueError(f"TTS_PROVIDER invalido: {settings.tts_provider!r}. Use: {allowed}.")
+    return provider
+
+
+def _selected_voice(provider: str, settings: Settings, voice: str | None = None) -> str:
+    requested = (voice or settings.tts_voice or "").strip()
+    key = requested.lower()
+    if provider == "gtts":
+        return _GTTS_LANG_ALIASES.get(key, "pt")
+    if provider == "edge":
+        return _EDGE_VOICE_ALIASES.get(key, requested or _EDGE_VOICE_ALIASES["pt-br"])
+    if provider == "elevenlabs":
+        return requested or settings.elevenlabs_voice_id or DEFAULT_ELEVENLABS_VOICE_ID
+    selected = requested or "nova"
+    return selected if selected in {"alloy", "echo", "fable", "onyx", "nova", "shimmer"} else "nova"
+
+
+def _cache_hash(text: str, provider: str, voice: str, model: str = "") -> str:
+    cache_key = "|".join((provider, voice, model, text))
+    return hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:12]
 
 
 async def generate_tts(
@@ -61,7 +120,10 @@ async def generate_tts(
     output_dir = Path(settings.tts_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    file_hash = _text_hash(text)
+    provider = _provider_or_raise(settings)
+    selected_voice = _selected_voice(provider, settings, voice)
+    model_id = settings.elevenlabs_model_id if provider == "elevenlabs" else ""
+    file_hash = _cache_hash(text, provider, selected_voice, model_id)
     file_path = output_dir / f"tts_{file_hash}.mp3"
 
     # Cache: se o arquivo ja existe, reutiliza
@@ -69,40 +131,92 @@ async def generate_tts(
         logger.info("Audio TTS ja existe em cache: %s", file_path)
         return str(file_path)
 
-    if settings.tts_provider == "openai":
-        return await _generate_openai_tts(text, file_path, settings, voice=voice)
-    else:
-        return await _generate_gtts(text, file_path, settings, voice=voice)
+    if provider == "elevenlabs":
+        return await _generate_elevenlabs_tts(text, file_path, settings, selected_voice)
+    if provider == "edge":
+        return await _generate_edge_tts(text, file_path, selected_voice)
+    if provider == "openai":
+        return await _generate_openai_tts(text, file_path, settings, selected_voice)
+    return await _generate_gtts(text, file_path, selected_voice)
 
 
-async def _generate_gtts(text: str, file_path: Path, settings: Settings, voice: str | None = None) -> str:
+async def _generate_gtts(text: str, file_path: Path, voice: str) -> str:
     """Gera audio usando gTTS (Google Text-to-Speech)."""
     from gtts import gTTS
 
-    lang = voice or settings.tts_voice
-    lang = lang if lang in {"pt", "pt-br", "en", "es"} else "pt"
-    tts = gTTS(text=text, lang=lang, slow=False)
+    tts = gTTS(text=text, lang=voice, slow=False)
     await _run_save(tts, file_path)
     logger.info("Audio TTS (gTTS) salvo em: %s", file_path)
     return str(file_path)
 
 
-async def _generate_openai_tts(text: str, file_path: Path, settings: Settings, voice: str | None = None) -> str:
-    """Gera audio usando OpenAI TTS API."""
-    import asyncio
+async def _generate_edge_tts(text: str, file_path: Path, voice: str) -> str:
+    """Gera audio usando Microsoft Edge TTS (sem chave de API)."""
+    try:
+        import edge_tts
+    except ImportError as exc:
+        raise RuntimeError(
+            "Provider TTS 'edge' requer a dependencia edge-tts. "
+            "Rode: pip install -r requirements.txt"
+        ) from exc
 
+    communicate = edge_tts.Communicate(text, voice=voice)
+    await communicate.save(str(file_path))
+    logger.info("Audio TTS (Edge) salvo em: %s", file_path)
+    return str(file_path)
+
+
+async def _generate_elevenlabs_tts(
+    text: str,
+    file_path: Path,
+    settings: Settings,
+    voice_id: str,
+) -> str:
+    """Gera audio usando a API Text-to-Speech da ElevenLabs."""
+    import aiohttp
+
+    api_key = settings.elevenlabs_api_key.strip()
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY nao configurada para TTS_PROVIDER=elevenlabs.")
+
+    url = ELEVENLABS_TTS_URL.format(voice_id=voice_id)
+    params = {"output_format": settings.elevenlabs_output_format or "mp3_44100_128"}
+    payload = {
+        "text": text,
+        "model_id": settings.elevenlabs_model_id or "eleven_flash_v2_5",
+    }
+    headers = {
+        "xi-api-key": api_key,
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+    }
+
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(url, params=params, json=payload, headers=headers) as response:
+            body = await response.read()
+            if response.status >= 400:
+                detail = body.decode("utf-8", errors="replace")[:300]
+                raise RuntimeError(
+                    f"ElevenLabs TTS falhou: status={response.status} body={detail}"
+                )
+
+    await asyncio.to_thread(file_path.write_bytes, body)
+    logger.info("Audio TTS (ElevenLabs) salvo em: %s", file_path)
+    return str(file_path)
+
+
+async def _generate_openai_tts(text: str, file_path: Path, settings: Settings, voice: str) -> str:
+    """Gera audio usando OpenAI TTS API."""
     from openai import AsyncOpenAI
 
     client = AsyncOpenAI(
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url or None,
     )
-    selected_voice = voice or settings.tts_voice
-    selected_voice = selected_voice if selected_voice in {"alloy", "echo", "fable", "onyx", "nova", "shimmer"} else "nova"
-
     response = await client.audio.speech.create(
         model="tts-1",
-        voice=selected_voice,
+        voice=voice,
         input=text,
     )
     # stream_to_file is blocking — run in thread to avoid blocking the event loop
@@ -251,12 +365,6 @@ async def handle_tts_command(
         public_url = await upload_tts_audio(audio_path, settings)
         if public_url:
             await models.update_tts_status(db, tts_id, "concluido", audio_url=public_url)
-            # Only delete local file if it was uploaded to Catbox (not local fallback)
-            if "catbox.moe" in public_url:
-                try:
-                    Path(audio_path).unlink(missing_ok=True)
-                except OSError:
-                    pass
             return f"Audio TTS gerado: {public_url}"
 
         await models.update_tts_status(
