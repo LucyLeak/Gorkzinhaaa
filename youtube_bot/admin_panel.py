@@ -122,9 +122,10 @@ class AdminPanel:
         if not name or not scopes:
             return web.json_response({"error": "Nome e ao menos um escopo são obrigatórios."}, status=400)
         raw_key = "gk_" + secrets.token_urlsafe(32)
+        key_prefix = raw_key[:12]
         salt = secrets.token_hex(16)
         key_hash = f"sha256${salt}${hashlib.sha256((salt + raw_key).encode()).hexdigest()}"
-        item = await models.create_api_client(self.db, name, key_hash, scopes)
+        item = await models.create_api_client(self.db, name, key_prefix, key_hash, scopes)
         item["created_at"] = item["created_at"].isoformat()
         return web.json_response({"key": raw_key, "client": item}, status=201)
 
@@ -134,10 +135,10 @@ class AdminPanel:
         rows = await self.db.fetch(
             """
             SELECT t.id, t.texto_original, t.texto_falado, t.audio_url, t.status,
-                   t.aprovado, u.id AS usuario_id, u.nome AS username
+                   t.aprovado, t.source, u.id AS usuario_id, u.nome AS username
             FROM tts_solicitacoes t
             JOIN usuarios u ON u.id = t.usuario_id
-            WHERE t.status = 'concluido'
+            WHERE t.status = 'concluido' AND t.source IN ('admin', 'live')
             ORDER BY t.criado_em ASC
             LIMIT 50
             """
@@ -166,10 +167,10 @@ class AdminPanel:
             rows = await self.db.fetch(
                 """
                 SELECT t.id, t.texto_original, t.texto_falado, t.audio_url, t.status,
-                       NULL AS aprovado, u.nome AS username
+                       NULL AS aprovado, t.source, u.nome AS username
                 FROM tts_solicitacoes t
                 JOIN usuarios u ON u.id = t.usuario_id
-                WHERE t.status = 'concluido'
+                WHERE t.status = 'concluido' AND t.source IN ('admin', 'live')
                 ORDER BY t.criado_em ASC
                 LIMIT 50
                 """

@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from youtube_bot.config import Settings
 
 logger = logging.getLogger(__name__)
+API_TTS_USER_ID = 999999998
 
 API_DOCS_HTML = r"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>API Gorkzinhaaa</title>
@@ -86,6 +87,7 @@ class TtsWebSocketServer:
         self._api_connection_counts: dict[int, int] = {}
         self._api_broadcasted: set[int] = set()
         self._api_rate_limits: dict[tuple[int, str], list[float]] = {}
+        self._api_rate_limit_prune_at = 0.0
 
         # Ensure the TTS audio directory exists (needed for static route and TTS generation)
         self._audio_dir = Path(settings.tts_output_dir if settings else "data/tts_audio")
@@ -209,7 +211,6 @@ class TtsWebSocketServer:
         if origin and (origin in origins):
             headers.update({
                 "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Credentials": "true",
                 "Vary": "Origin",
             })
         return headers
@@ -220,10 +221,12 @@ class TtsWebSocketServer:
     def _api_error(self, request: web.Request, code: str, message: str, status: int) -> web.Response:
         return self._api_response(request, {"error": {"code": code, "message": message}}, status)
 
-    async def _api_options(self, request: web.Request) -> web.Response:
+    async def _api_options(
+        self, request: web.Request, methods: str = "GET, POST, OPTIONS"
+    ) -> web.Response:
         headers = self._cors_headers(request)
         headers.update({
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Methods": methods,
             "Access-Control-Allow-Headers": "Authorization, Content-Type, Prefer",
             "Access-Control-Max-Age": "86400",
         })
@@ -233,7 +236,9 @@ class TtsWebSocketServer:
         if not key:
             return None
         rows = await self.db.fetch(
-            "SELECT * FROM api_clients WHERE revoked_at IS NULL ORDER BY id"
+            "SELECT * FROM api_clients WHERE key_prefix = $1 "
+            "AND revoked_at IS NULL ORDER BY id",
+            key[:12],
         )
         for row in rows:
             value = str(row["key_hash"])
@@ -262,6 +267,14 @@ class TtsWebSocketServer:
         limit: int,
     ) -> web.Response | None:
         now = time.monotonic()
+        if now >= self._api_rate_limit_prune_at:
+            for stored_key, stored_timestamps in list(self._api_rate_limits.items()):
+                active = [timestamp for timestamp in stored_timestamps if now - timestamp < 60]
+                if active:
+                    self._api_rate_limits[stored_key] = active
+                else:
+                    self._api_rate_limits.pop(stored_key, None)
+            self._api_rate_limit_prune_at = now + 60
         key = (int(client["id"]), bucket)
         timestamps = [
             timestamp
@@ -284,7 +297,9 @@ class TtsWebSocketServer:
 
     async def _handle_api_health(self, request: web.Request) -> web.Response:
         if request.method == "OPTIONS":
-            return await self._api_options(request)
+            return await self._api_options(request, "GET, OPTIONS")
+        if request.method != "GET":
+            return self._api_error(request, "method_not_allowed", "Use GET.", 405)
         return self._api_response(request, {"ok": True})
 
     async def _handle_api_status(self, request: web.Request) -> web.Response:
@@ -316,9 +331,6 @@ class TtsWebSocketServer:
             return self._api_error(request, "unauthorized", "API key ou escopo inválido.", 401)
         if request.method != "POST":
             return self._api_error(request, "method_not_allowed", "Use POST.", 405)
-        rate_limit = self._api_rate_limit(request, client, "tts_generate", 10)
-        if rate_limit is not None:
-            return rate_limit
         try:
             body = await request.json()
         except (json.JSONDecodeError, ValueError):
@@ -332,17 +344,6 @@ class TtsWebSocketServer:
             return self._api_error(request, "unavailable", "TTS indisponível.", 503)
         provider = str(body.get("provider") or settings.tts_provider)
         voice = str(body.get("voice") or settings.tts_voice)
-        try:
-            row_id = await models.insert_admin_tts_request(
-                self.db, settings.admin_test_user_id, str(body.get("text") or text), text,
-                status="processando",
-            )
-        except Exception:
-            logger.exception("Failed to create public TTS request")
-            return self._api_error(request, "database_error", "Não foi possível criar a solicitação.", 503)
-        task = asyncio.create_task(self._generate_api_tts(row_id, text, provider, voice))
-        self._api_tasks.add(task)
-        task.add_done_callback(self._api_tasks.discard)
         wait_requested = request.query.get("wait", "").lower() == "true"
         requested_wait_seconds: int | None = None
         prefer = request.headers.get("Prefer", "")
@@ -354,9 +355,23 @@ class TtsWebSocketServer:
                 wait_requested = requested_wait_seconds > 0
             except ValueError:
                 pass
+        if wait_requested and self._api_waiters.locked():
+            return self._api_error(request, "busy", "Limite de esperas síncronas atingido.", 429)
+        rate_limit = self._api_rate_limit(request, client, "tts_generate", 10)
+        if rate_limit is not None:
+            return rate_limit
+        try:
+            row_id = await models.insert_admin_tts_request(
+                self.db, API_TTS_USER_ID, str(body.get("text") or text), text,
+                status="processando", source="api",
+            )
+        except Exception:
+            logger.exception("Failed to create public TTS request")
+            return self._api_error(request, "database_error", "Não foi possível criar a solicitação.", 503)
+        task = asyncio.create_task(self._generate_api_tts(row_id, text, provider, voice))
+        self._api_tasks.add(task)
+        task.add_done_callback(self._api_tasks.discard)
         if wait_requested:
-            if self._api_waiters._value <= 0:
-                return self._api_error(request, "busy", "Limite de esperas síncronas atingido.", 429)
             configured_timeout = max(
                 1, getattr(settings, "api_tts_wait_timeout_seconds", 15)
             )
@@ -381,7 +396,7 @@ class TtsWebSocketServer:
         from youtube_bot.fun.tts import generate_tts, upload_tts_audio
         try:
             settings = replace(self.settings, tts_provider=provider, tts_voice=voice)
-            path = await generate_tts(text, settings, self.db, settings.admin_test_user_id, voice=voice)
+            path = await generate_tts(text, settings, self.db, API_TTS_USER_ID, voice=voice)
             url = await upload_tts_audio(path, settings)
             if not url:
                 raise RuntimeError("Não foi possível publicar o áudio.")
