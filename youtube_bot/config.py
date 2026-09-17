@@ -75,6 +75,8 @@ class Settings:
     brain_surprise_chance: float
     forbidden_words: tuple[str, ...]
     log_level: str
+    admin_test_user_id: int
+    admin_test_username: str
 
     @property
     def has_youtube_oauth(self) -> bool:
@@ -169,6 +171,8 @@ def load_settings() -> Settings:
         brain_surprise_chance=_float(os.getenv("BRAIN_SURPRISE_CHANCE"), 0.20),
         forbidden_words=_split_csv(os.getenv("FORBIDDEN_WORDS")),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
+        admin_test_user_id=_int(os.getenv("ADMIN_TEST_USER_ID"), 999999999),
+        admin_test_username=os.getenv("ADMIN_TEST_USERNAME", "[admin]"),
     )
 
 

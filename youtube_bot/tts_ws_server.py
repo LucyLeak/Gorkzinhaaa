@@ -204,8 +204,17 @@ class TtsWebSocketServer:
 
         from youtube_bot.fun.tts import generate_tts, sanitize_tts_text, upload_tts_audio
 
-        text = sanitize_tts_text(str(payload.get("text") or ""))
+        raw_text = str(payload.get("text") or "")
+        text = sanitize_tts_text(raw_text)
         if not text:
+            await models.insert_admin_tts_request(
+                self.db,
+                self.settings.admin_test_user_id,
+                raw_text,
+                text,
+                status="erro",
+                erro="O texto ficou vazio após a limpeza.",
+            )
             await self._send_json(ws, {"type": "tts_test_progress", "message": "O texto ficou vazio após a limpeza.", "error": True})
             return
 
@@ -227,6 +236,14 @@ class TtsWebSocketServer:
             audio_url = await upload_tts_audio(audio_path, test_settings)
             if not audio_url:
                 raise RuntimeError("Não foi possível obter uma URL pública para o áudio.")
+            tts_id = await models.insert_admin_tts_request(
+                self.db,
+                self.settings.admin_test_user_id,
+                raw_text,
+                text,
+                audio_url=audio_url,
+                status="concluido",
+            )
             await self._send_json(ws, {
                 "type": "tts_test_result",
                 "ok": True,
@@ -236,6 +253,14 @@ class TtsWebSocketServer:
             })
         except Exception as exc:
             logger.exception("Admin TTS test failed.")
+            await models.insert_admin_tts_request(
+                self.db,
+                self.settings.admin_test_user_id,
+                raw_text,
+                text,
+                status="erro",
+                erro=str(exc),
+            )
             await self._send_json(ws, {"type": "tts_test_result", "ok": False, "error": str(exc)})
 
     async def _poll_once(self) -> None:

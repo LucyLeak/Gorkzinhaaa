@@ -91,5 +91,9 @@ services:
         sync: false
       - key: ADMIN_TOKEN
         sync: false
+      - key: ADMIN_TEST_USER_ID
+        sync: false
+      - key: ADMIN_TEST_USERNAME
+        sync: false
       - key: MEMORY_RETENTION_DAYS
         sync: false

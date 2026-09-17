@@ -18,7 +18,9 @@ Bot em Python para comentários do YouTube.
 │   └── tts_audio/                     # Áudios TTS gerados (gitignored)
 ├── migrations/
 │   ├── 001_init.sql                   # Schema SQL inicial
-│   └── 002_tts_approval.sql           # Coluna aprovado na tabela TTS
+│   ├── 002_tts_approval.sql           # Coluna aprovado na tabela TTS
+│   ├── 004_user_channel_id.sql        # Identidade estável do canal
+│   └── 005_user_personalidade.sql     # Personalidade e notas
 ├── tools/
 │   ├── fix_tts_constraint.py
 │   ├── get_youtube_refresh_token.py   # Gera refresh token OAuth do YouTube
@@ -165,6 +167,21 @@ O Neon precisa ter a extensão `vector` habilitada.
 | `configuracoes_cerebro` | Prompts base e pesos de cada cérebro (A e B) |
 | `tts_solicitacoes` | Solicitações de Text-to-Speech com status e URL do áudio (Catbox) |
 | `historico_humor` | Registro de humor dos usuários ao longo do tempo |
+
+### Personalidades
+
+A aba **Personalidades** do painel administrativo lista usuários com busca por
+handle/nome ou `youtube_channel_id`, paginação de aproximadamente 50 registros,
+contagem total e edição inline de personalidade (`amigo`, `neutro`, `inimigo`,
+`evitar` ou `bloqueado`) e notas. O padrão aplicado é `neutro`; os campos são
+administrativos e ainda não alteram os prompts dos cérebros. Comentários e lives
+usam o channel ID como identidade preferencial; quando ausente, o nome é usado
+como fallback com aviso no log, preservando o histórico.
+
+O Terminal de Teste TTS grava cada execução em `tts_solicitacoes` usando o usuário
+administrativo reservado configurado por `ADMIN_TEST_USER_ID` e
+`ADMIN_TEST_USERNAME`. Esse usuário é criado de forma idempotente no startup
+antes do processamento de mensagens.
 
 ---
 
@@ -431,6 +448,8 @@ O protocolo usa `tts_queue` para snapshots da fila. O terminal envia `tts_test` 
 
 ```env
 ADMIN_TOKEN=seu_token_secreto_aqui
+ADMIN_TEST_USER_ID=999999999
+ADMIN_TEST_USERNAME=[admin]
 ```
 
 ---

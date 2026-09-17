@@ -98,6 +98,15 @@ textarea { width: 100%; min-height: 200px; background: var(--bg); border: 1px so
     <button class="tab" data-panel="tts-test">🧪 Teste TTS</button>
     <button class="tab" data-panel="cleanup">🗑️ Limpeza</button>
     <button class="tab" data-panel="terminal">💻 Terminal</button>
+    <button class="tab" data-panel="personalidades">👤 Personalidades</button>
+  </div>
+  <div class="panel" id="panel-personalidades">
+    <div class="card"><h2>Personalidades</h2>
+      <input id="personalitySearch" placeholder="Buscar por handle, nome ou channel ID" style="padding:7px;width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border)">
+      <div id="personalityCounts" style="margin:10px 0;color:var(--muted)"></div><div id="personalities"></div>
+      <button class="btn" onclick="personalityPage--; loadPersonalities()">Anterior</button>
+      <button class="btn" onclick="personalityPage++; loadPersonalities()">Próxima</button>
+    </div>
   </div>
 
   <!-- TTS QUEUE PANEL -->
@@ -105,6 +114,7 @@ textarea { width: 100%; min-height: 200px; background: var(--bg); border: 1px so
     <div class="card">
       <h2>Fila de Aprovação TTS</h2>
       <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Áudios pendentes de aprovação. Aprove ou rejeite cada um.</p>
+      <label style="font-size:12px"><input type="checkbox" id="hideAdminTests"> Ocultar testes do admin</label>
       <div id="ttsQueue" class="queue-scroll"></div>
     </div>
   </div>
@@ -113,7 +123,7 @@ textarea { width: 100%; min-height: 200px; background: var(--bg); border: 1px so
   <div class="panel" id="panel-tts-test">
     <div class="card">
       <h2>Terminal de Teste TTS</h2>
-      <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Gera um áudio isolado. Não cria item na fila nem interfere no bot.</p>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Gera um áudio sem interferir no processamento do bot. Testes são salvos no histórico.</p>
       <div class="form-group"><label for="ttsTestProvider">Provedor</label><select id="ttsTestProvider"><option>gtts</option><option>edge</option><option>openai</option><option>elevenlabs</option></select></div>
       <div class="form-group"><label for="ttsTestVoice">Voz / idioma</label><input id="ttsTestVoice" value="pt" placeholder="pt, pt-BR-FranciscaNeural, nova..."></div>
       <div class="form-group"><label for="ttsTestElevenVoice">ElevenLabs Voice ID</label><input id="ttsTestElevenVoice" placeholder="Opcional"></div>
@@ -164,6 +174,7 @@ textarea { width: 100%; min-height: 200px; background: var(--bg); border: 1px so
 <div id="toastContainer"></div>
 
 <script>
+const ADMIN_TEST_USER_ID = __ADMIN_TEST_USER_ID__;
 const TOKEN = new URLSearchParams(location.search).get('token') || '';
 if (!TOKEN) { document.body.innerHTML = '<div style="padding:40px;text-align:center"><h2>Acesso Restrito</h2><p>Adicione ?token=SEU_TOKEN na URL.</p></div>'; }
 
@@ -183,6 +194,7 @@ function toast(msg, type='success') {
 }
 
 // ── Tabs ──────────────────────────────────────────────
+let personalityPage = 0;
 document.querySelectorAll('.tab').forEach(t => {
   t.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
@@ -190,8 +202,25 @@ document.querySelectorAll('.tab').forEach(t => {
     t.classList.add('active');
     document.getElementById('panel-' + t.dataset.panel).classList.add('active');
     if (t.dataset.panel === 'cleanup') loadAudioStats();
+    if (t.dataset.panel === 'personalidades') loadPersonalities();
   });
 });
+function loadPersonalities() {
+  const q = encodeURIComponent(document.getElementById('personalitySearch').value);
+  api('/user-personalities?search=' + q + '&offset=' + (personalityPage * 50)).then(r => {
+    document.getElementById('personalityCounts').textContent = `Total: ${r.total || 0} · Amigo: ${r.counts?.amigo || 0} · Neutro: ${r.counts?.neutro || 0} · Inimigo: ${r.counts?.inimigo || 0} · Evitar: ${r.counts?.evitar || 0} · Bloqueado: ${r.counts?.bloqueado || 0} · Página ${personalityPage + 1}`;
+    document.getElementById('personalities').innerHTML = '<table><tr><th>Canal</th><th>Nome/handle</th><th>Personalidade</th><th>Notas</th><th>Última mensagem</th></tr>' +
+      (r.items || []).map(u => `<tr><td>${escapeHtml(u.youtube_channel_id || '-')}</td><td>${escapeHtml(u.nome || u.youtube_id)}</td><td><select onchange="savePersonality('${escapeHtml(u.youtube_channel_id || '')}', this.value, this.parentElement.nextElementSibling.querySelector('textarea').value)"><option value="amigo" ${u.personalidade === 'amigo' ? 'selected' : ''}>Amigo</option><option value="neutro" ${!u.personalidade || u.personalidade === 'neutro' ? 'selected' : ''}>Neutro</option><option value="inimigo" ${u.personalidade === 'inimigo' ? 'selected' : ''}>Inimigo</option><option value="evitar" ${u.personalidade === 'evitar' ? 'selected' : ''}>Evitar</option><option value="bloqueado" ${u.personalidade === 'bloqueado' ? 'selected' : ''}>Bloqueado</option></select></td><td><textarea rows="2" onchange="savePersonality('${escapeHtml(u.youtube_channel_id || '')}', this.parentElement.previousElementSibling.querySelector('select').value, this.value)">${escapeHtml(u.personalidade_notas || '')}</textarea></td><td>${escapeHtml(u.ultimo_contato || '-')}</td></tr>`).join('') + '</table>';
+  });
+}
+function savePersonality(channel_id, personalidade, notas) {
+  if (!channel_id) return toast('Usuário sem channel ID não pode ser editado.', 'error');
+  api('/user-personality', {method:'POST', body:JSON.stringify({channel_id, personalidade: personalidade || null, notas})}).then(r => toast(r.ok ? 'Salvo!' : (r.error || 'Erro'), r.ok ? 'success' : 'error'));
+}
+document.getElementById('personalitySearch').oninput = () => { personalityPage = 0; loadPersonalities(); };
+const hideAdminTests = document.getElementById('hideAdminTests');
+hideAdminTests.checked = localStorage.getItem('hide_admin_tests') === 'true';
+hideAdminTests.onchange = () => { localStorage.setItem('hide_admin_tests', hideAdminTests.checked); };
 
 // ── TTS Queue ─────────────────────────────────────────
 function escapeHtml(value) {
@@ -199,6 +228,7 @@ function escapeHtml(value) {
 }
 
 function renderTTSQueue(items) {
+  if (document.getElementById('hideAdminTests').checked) items = items.filter(x => Number(x.usuario_id) !== ADMIN_TEST_USER_ID);
   const div = document.getElementById('ttsQueue');
   const atBottom = div.scrollHeight - div.scrollTop - div.clientHeight < 24;
   if (!items || !items.length) {
@@ -353,7 +383,10 @@ class AdminPanel:
     async def handle_page(self, request: web.Request) -> web.Response:
         if not self._check_auth(request):
             return web.Response(text="Unauthorized — add ?token=YOUR_TOKEN", status=401, content_type="text/plain")
-        return web.Response(text=ADMIN_HTML, content_type="text/html")
+        return web.Response(
+            text=ADMIN_HTML.replace("__ADMIN_TEST_USER_ID__", str(self.settings.admin_test_user_id)),
+            content_type="text/html",
+        )
 
     # ── API: Ping ──────────────────────────────────────────────────
 
@@ -368,7 +401,7 @@ class AdminPanel:
         rows = await self.db.fetch(
             """
             SELECT t.id, t.texto_original, t.texto_falado, t.audio_url, t.status,
-                   t.aprovado, u.nome AS username
+                   t.aprovado, u.id AS usuario_id, u.nome AS username
             FROM tts_solicitacoes t
             JOIN usuarios u ON u.id = t.usuario_id
             WHERE t.status = 'concluido'
@@ -385,6 +418,7 @@ class AdminPanel:
                 "status": r["status"],
                 "aprovado": r["aprovado"],
                 "username": r["username"],
+                "usuario_id": r["usuario_id"],
             }
             for r in rows
         ]
@@ -450,6 +484,40 @@ class AdminPanel:
         if self.on_tts_changed is not None:
             await self.on_tts_changed()
         return web.json_response({"ok": True, "id": tts_id_int, "aprovado": aprovado})
+
+    async def handle_user_personalities(self, request: web.Request) -> web.Response:
+        if not self._check_auth(request):
+            return self._auth_error()
+        search = request.query.get("search", "")
+        try:
+            offset = max(0, int(request.query.get("offset", "0")))
+        except ValueError:
+            offset = 0
+        items, total, counts = await models.list_personality_users(self.db, search, 50, offset)
+        for item in items:
+            if item.get("ultimo_contato") is not None:
+                item["ultimo_contato"] = item["ultimo_contato"].isoformat()
+        return web.json_response({"items": items, "total": total, "counts": counts, "offset": offset})
+
+    async def handle_user_personality(self, request: web.Request) -> web.Response:
+        if not self._check_auth(request):
+            return self._auth_error()
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON"}, status=400)
+        personality = data.get("personalidade")
+        if personality in ("", None):
+            personality = None
+        if personality not in (None, "amigo", "neutro", "inimigo", "evitar", "bloqueado"):
+            return web.json_response({"error": "Personalidade inválida"}, status=400)
+        channel_id = str(data.get("channel_id") or "").strip()
+        if not channel_id:
+            return web.json_response({"error": "channel_id obrigatório"}, status=400)
+        ok = await models.update_user_personality(
+            self.db, channel_id, personality, str(data.get("notas") or "").strip() or None
+        )
+        return web.json_response({"ok": ok}, status=200 if ok else 404)
 
     # ── API: Audio Stats & Cleanup ─────────────────────────────────
 
@@ -536,6 +604,8 @@ class AdminPanel:
         app.router.add_get("/admin/api/ping", self.handle_ping)
         app.router.add_get("/admin/api/tts-queue", self.handle_tts_queue)
         app.router.add_put("/admin/api/tts-queue/{id}", self.handle_tts_approve)
+        app.router.add_get("/admin/api/user-personalities", self.handle_user_personalities)
+        app.router.add_post("/admin/api/user-personality", self.handle_user_personality)
         app.router.add_get("/admin/api/audio-stats", self.handle_audio_stats)
         app.router.add_post("/admin/api/cleanup", self.handle_cleanup)
         app.router.add_post("/admin/api/terminal", self.handle_terminal)
