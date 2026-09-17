@@ -27,11 +27,27 @@ services:
         sync: false
       - key: YOUTUBE_CHANNEL_HANDLE
         sync: false
+      - key: YOUTUBE_CHANNEL_ID
+        sync: false
       - key: YOUTUBE_VIDEO_IDS
         sync: false
       - key: YOUTUBE_BOT_CHANNEL_ID
         sync: false
       - key: YOUTUBE_LIVE_URL
+        sync: false
+      - key: YOUTUBE_LIVE_SCHEDULE_ENABLED
+        sync: false
+      - key: YOUTUBE_LIVE_SCHEDULE_TIMEZONE
+        sync: false
+      - key: YOUTUBE_LIVE_SCHEDULE_DAYS
+        sync: false
+      - key: YOUTUBE_LIVE_SCHEDULE_START
+        sync: false
+      - key: YOUTUBE_LIVE_SCHEDULE_END
+        sync: false
+      - key: YOUTUBE_LIVE_SCHEDULE_POLL_MINUTES
+        sync: false
+      - key: YOUTUBE_LIVE_RESUME_GRACE_MINUTES
         sync: false
       - key: YOUTUBE_LIVE_CONNECT_MESSAGE
         sync: false
@@ -41,9 +57,19 @@ services:
         sync: false
       - key: TTS_VOICE
         sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: ELEVENLABS_MODEL_ID
+        sync: false
+      - key: ELEVENLABS_OUTPUT_FORMAT
+        sync: false
       - key: TTS_OUTPUT_DIR
         sync: false
       - key: TTS_COOLDOWN_MINUTES
+        sync: false
+      - key: TTS_WS_HOST
         sync: false
       - key: TTS_WS_PORT
         sync: false

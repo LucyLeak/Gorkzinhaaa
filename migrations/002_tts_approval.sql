@@ -1,5 +1,5 @@
 -- =====================================================
--- 002: Adiciona coluna de aprovação TTS
+-- 002: Adiciona suporte a aprovacao e fila TTS do admin
 -- =====================================================
 
 -- Adiciona a coluna "aprovado" se ela não existir
@@ -15,6 +15,11 @@ BEGIN
     END IF;
 END $$;
 
+-- Índice para listagem da fila TTS em tempo real no admin panel
+CREATE INDEX IF NOT EXISTS idx_tts_status_criado
+    ON tts_solicitacoes(status, criado_em);
+
 -- Índice para consultar TTS pendentes de aprovação
-CREATE INDEX IF NOT EXISTS idx_tts_aprovado ON tts_solicitacoes(aprovado, criado_em)
+CREATE INDEX IF NOT EXISTS idx_tts_aprovado
+    ON tts_solicitacoes(aprovado, criado_em)
     WHERE status = 'concluido' AND aprovado IS NULL;
