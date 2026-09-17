@@ -78,18 +78,22 @@ CREATE TABLE IF NOT EXISTS tts_solicitacoes (
     aprovado BOOLEAN DEFAULT NULL,
     erro TEXT,
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
-    concluido_em TIMESTAMPTZ
+    concluido_em TIMESTAMPTZ,
+    source TEXT NOT NULL DEFAULT 'admin'
 );
 
 CREATE TABLE IF NOT EXISTS api_clients (
     id BIGSERIAL PRIMARY KEY,
     name TEXT NOT NULL,
+    key_prefix TEXT NOT NULL,
     key_hash TEXT NOT NULL,
     scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     revoked_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_api_clients_active ON api_clients(id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_api_clients_key_prefix ON api_clients(key_prefix)
+    WHERE revoked_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_mensagens_timestamp
     ON mensagens(timestamp);
@@ -99,6 +103,8 @@ CREATE INDEX IF NOT EXISTS idx_respostas_timestamp
 
 CREATE INDEX IF NOT EXISTS idx_tts_criado_em
     ON tts_solicitacoes(criado_em);
+CREATE INDEX IF NOT EXISTS idx_tts_source
+    ON tts_solicitacoes(source);
 
 CREATE INDEX IF NOT EXISTS idx_memorias_criado_em
     ON memorias_semanticas(criado_em);
@@ -123,10 +129,16 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS personalidade_notas TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_youtube_channel_id
     ON usuarios(youtube_channel_id) WHERE youtube_channel_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS api_clients (
-    id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL,
+    id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, key_prefix TEXT, key_hash TEXT NOT NULL,
     scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), revoked_at TIMESTAMPTZ
 );
+ALTER TABLE tts_solicitacoes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'admin';
+ALTER TABLE api_clients ADD COLUMN IF NOT EXISTS key_prefix TEXT;
+CREATE INDEX IF NOT EXISTS idx_api_clients_key_prefix ON api_clients(key_prefix)
+    WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tts_source
+    ON tts_solicitacoes(source);
 """
 
 
@@ -197,12 +209,13 @@ async def ensure_admin_test_user(db: Database, user_id: int, username: str) -> N
 
 
 async def create_api_client(
-    db: Database, name: str, key_hash: str, scopes: list[str],
+    db: Database, name: str, key_prefix: str, key_hash: str, scopes: list[str],
 ) -> dict[str, Any]:
     row = await db.fetchrow(
-        """INSERT INTO api_clients (name, key_hash, scopes)
-           VALUES ($1, $2, $3) RETURNING id, name, scopes, created_at, revoked_at""",
-        name, key_hash, scopes,
+        """INSERT INTO api_clients (name, key_prefix, key_hash, scopes)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, name, key_prefix, scopes, created_at, revoked_at""",
+        name, key_prefix, key_hash, scopes,
     )
     return dict(row) if row else {}
 
@@ -229,17 +242,19 @@ async def get_api_client_by_id(db: Database, client_id: int) -> dict[str, Any] |
 
 async def insert_admin_tts_request(
     db: Database, user_id: int, raw_text: str, spoken_text: str,
-    audio_url: str | None = None, status: str = "processando", erro: str | None = None,
+    audio_url: str | None = None, status: str = "processando",
+    erro: str | None = None, source: str = "admin",
 ) -> int:
     return await db.fetchval(
         """
         INSERT INTO tts_solicitacoes
-            (usuario_id, texto_original, texto_falado, audio_url, status, erro, concluido_em, aprovado)
+            (usuario_id, texto_original, texto_falado, audio_url, status, erro,
+             concluido_em, aprovado, source)
         VALUES ($1, $2, $3, $4, $5, $6,
-                CASE WHEN $5 IN ('concluido', 'erro') THEN now() ELSE NULL END, true)
+                CASE WHEN $5 IN ('concluido', 'erro') THEN now() ELSE NULL END, true, $7)
         RETURNING id
         """,
-        user_id, raw_text, spoken_text, audio_url, status, erro,
+        user_id, raw_text, spoken_text, audio_url, status, erro, source,
     )
 
 
@@ -391,8 +406,8 @@ async def insert_tts_request(
 ) -> int:
     return await db.fetchval(
         """
-        INSERT INTO tts_solicitacoes (usuario_id, texto_original, texto_falado)
-        VALUES ($1, $2, $3)
+        INSERT INTO tts_solicitacoes (usuario_id, texto_original, texto_falado, source)
+        VALUES ($1, $2, $3, 'live')
         RETURNING id
         """,
         user_id,

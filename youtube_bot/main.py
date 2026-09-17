@@ -75,6 +75,7 @@ async def main() -> None:
     await ensure_admin_test_user(
         db, settings.admin_test_user_id, settings.admin_test_username
     )
+    await ensure_admin_test_user(db, 999999998, "[api]")
 
     openai_client = (
         AsyncOpenAI(
