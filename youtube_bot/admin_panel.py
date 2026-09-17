@@ -1,4 +1,4 @@
-"""Admin web panel — runtime settings editor, TTS approval queue, audio cleanup.
+"""Admin web panel — TTS approval queue, audio cleanup, and test terminal.
 
 Served at /admin — protected by ADMIN_TOKEN env var.
 """
@@ -11,6 +11,7 @@ import logging
 import os
 import time
 from pathlib import Path
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from aiohttp import web
@@ -23,34 +24,6 @@ if TYPE_CHECKING:
     from youtube_bot.config import Settings
 
 logger = logging.getLogger(__name__)
-
-# ── Editable settings (whitelist) ────────────────────────────────────
-# Only these keys can be changed at runtime via the admin panel.
-# They map to os.environ keys.
-EDITABLE_SETTINGS: dict[str, dict] = {
-    "openai_api_key":       {"env": "OPENAI_API_KEY",       "label": "OpenAI API Key",       "type": "password"},
-    "openai_base_url":      {"env": "OPENAI_BASE_URL",      "label": "OpenAI Base URL",      "type": "text"},
-    "openai_chat_model":    {"env": "OPENAI_CHAT_MODEL",    "label": "Chat Model",           "type": "text"},
-    "youtube_live_url":     {"env": "YOUTUBE_LIVE_URL",     "label": "YouTube Live URL",     "type": "text"},
-    "youtube_channel_handle":{"env": "YOUTUBE_CHANNEL_HANDLE","label": "YouTube @handle",    "type": "text"},
-    "youtube_api_key":      {"env": "YOUTUBE_API_KEY",      "label": "YouTube API Key",      "type": "password"},
-    "giphy_api_key":        {"env": "GIPHY_API_KEY",        "label": "Giphy API Key",        "type": "password"},
-    "tts_provider":         {"env": "TTS_PROVIDER",         "label": "TTS Provider",         "type": "select", "options": ["gtts", "edge", "elevenlabs", "openai"]},
-    "tts_voice":            {"env": "TTS_VOICE",            "label": "TTS Voice",            "type": "text"},
-    "elevenlabs_api_key":   {"env": "ELEVENLABS_API_KEY",   "label": "ElevenLabs API Key",  "type": "password"},
-    "elevenlabs_voice_id":  {"env": "ELEVENLABS_VOICE_ID",  "label": "ElevenLabs Voice ID", "type": "text"},
-    "elevenlabs_model_id":  {"env": "ELEVENLABS_MODEL_ID",  "label": "ElevenLabs Model",    "type": "text"},
-    "elevenlabs_output_format": {"env": "ELEVENLABS_OUTPUT_FORMAT", "label": "ElevenLabs Output", "type": "text"},
-    "tts_cooldown_minutes": {"env": "TTS_COOLDOWN_MINUTES", "label": "TTS Cooldown (min)",   "type": "number"},
-    "dry_run":              {"env": "DRY_RUN",              "label": "Dry Run",              "type": "select", "options": ["true", "false"]},
-    "poll_interval_seconds": {"env": "POLL_INTERVAL_SECONDS","label": "Poll Interval (s)",   "type": "number"},
-    "max_repair_attempts":  {"env": "MAX_REPAIR_ATTEMPTS",  "label": "Max Repair Attempts",  "type": "number"},
-    "coherence_threshold":  {"env": "COHERENCE_THRESHOLD",  "label": "Coherence Threshold",  "type": "number"},
-    "brain_surprise_chance": {"env": "BRAIN_SURPRISE_CHANCE","label": "Brain Surprise %",    "type": "number"},
-    "log_level":            {"env": "LOG_LEVEL",            "label": "Log Level",            "type": "select", "options": ["DEBUG", "INFO", "WARNING", "ERROR"]},
-    "public_base_url":      {"env": "PUBLIC_BASE_URL",      "label": "Public Base URL",      "type": "text"},
-    "memory_retention_days":{"env": "MEMORY_RETENTION_DAYS","label": "Memory Retention (d)", "type": "number"},
-}
 
 ADMIN_HTML = r"""<!DOCTYPE html>
 <html lang="pt">
@@ -100,6 +73,9 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 600; }
 .audio-cell audio { height: 28px; }
+.queue-scroll { max-height: 520px; overflow: auto; }
+.terminal-output { min-height: 180px; max-height: 360px; overflow: auto; background: #090d12; color: #9fef9f; white-space: pre-wrap; }
+.terminal-output .error { color: var(--red); }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
 .badge.pending { background: #1f3a5f; color: var(--accent); }
 .badge.approved { background: #1a3a1a; color: var(--green); }
@@ -118,20 +94,10 @@ textarea { width: 100%; min-height: 200px; background: var(--bg); border: 1px so
 </header>
 <main>
   <div class="tabs">
-    <button class="tab active" data-panel="settings">⚙️ Configurações</button>
-    <button class="tab" data-panel="tts">🎙️ Fila TTS</button>
+    <button class="tab active" data-panel="tts">🎙️ Fila TTS</button>
+    <button class="tab" data-panel="tts-test">🧪 Teste TTS</button>
     <button class="tab" data-panel="cleanup">🗑️ Limpeza</button>
     <button class="tab" data-panel="terminal">💻 Terminal</button>
-  </div>
-
-  <!-- SETTINGS PANEL -->
-  <div class="panel active" id="panel-settings">
-    <div class="card">
-      <h2>Variáveis de Ambiente (Runtime)</h2>
-      <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Alterações aplicam imediatamente no os.environ. Requer restart do bot para algumas variáveis.</p>
-      <form id="settingsForm"></form>
-      <button class="btn primary" onclick="saveSettings()" style="margin-top:12px">💾 Salvar Todas</button>
-    </div>
   </div>
 
   <!-- TTS QUEUE PANEL -->
@@ -139,7 +105,24 @@ textarea { width: 100%; min-height: 200px; background: var(--bg); border: 1px so
     <div class="card">
       <h2>Fila de Aprovação TTS</h2>
       <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Áudios pendentes de aprovação. Aprove ou rejeite cada um.</p>
-      <div id="ttsQueue"></div>
+      <div id="ttsQueue" class="queue-scroll"></div>
+    </div>
+  </div>
+
+  <!-- TTS TEST PANEL -->
+  <div class="panel" id="panel-tts-test">
+    <div class="card">
+      <h2>Terminal de Teste TTS</h2>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Gera um áudio isolado. Não cria item na fila nem interfere no bot.</p>
+      <div class="form-group"><label for="ttsTestProvider">Provedor</label><select id="ttsTestProvider"><option>gtts</option><option>edge</option><option>openai</option><option>elevenlabs</option></select></div>
+      <div class="form-group"><label for="ttsTestVoice">Voz / idioma</label><input id="ttsTestVoice" value="pt" placeholder="pt, pt-BR-FranciscaNeural, nova..."></div>
+      <div class="form-group"><label for="ttsTestElevenVoice">ElevenLabs Voice ID</label><input id="ttsTestElevenVoice" placeholder="Opcional"></div>
+      <div class="form-group"><label for="ttsTestModel">Modelo ElevenLabs</label><input id="ttsTestModel" placeholder="eleven_flash_v2_5"></div>
+      <div class="form-group"><label for="ttsTestFormat">Formato ElevenLabs</label><input id="ttsTestFormat" placeholder="mp3_44100_128"></div>
+      <textarea id="ttsTestText" maxlength="300" placeholder="Digite o texto para sintetizar..."></textarea>
+      <button class="btn primary" onclick="runTtsTest()" style="margin-top:10px">▶️ Gerar áudio</button>
+      <pre id="ttsTestOutput" class="terminal-output" style="margin-top:12px"></pre>
+      <audio id="ttsTestAudio" controls style="display:none;width:100%;margin-top:10px"></audio>
     </div>
   </div>
 
@@ -206,85 +189,91 @@ document.querySelectorAll('.tab').forEach(t => {
     document.querySelectorAll('.panel').forEach(x => x.classList.remove('active'));
     t.classList.add('active');
     document.getElementById('panel-' + t.dataset.panel).classList.add('active');
-    if (t.dataset.panel === 'tts') loadTTSQueue();
     if (t.dataset.panel === 'cleanup') loadAudioStats();
   });
 });
 
-// ── Settings ──────────────────────────────────────────
-function buildSettingsForm(settings) {
-  const form = document.getElementById('settingsForm');
-  form.innerHTML = '';
-  for (const [key, cfg] of Object.entries(settings)) {
-    const div = document.createElement('div');
-    div.className = 'form-group';
-    const label = document.createElement('label');
-    label.textContent = cfg.label;
-    div.appendChild(label);
-
-    if (cfg.type === 'select') {
-      const sel = document.createElement('select');
-      sel.name = key;
-      for (const opt of (cfg.options || [])) {
-        const o = document.createElement('option');
-        o.value = opt; o.textContent = opt;
-        if (opt === cfg.current) o.selected = true;
-        sel.appendChild(o);
-      }
-      div.appendChild(sel);
-    } else {
-      const input = document.createElement('input');
-      input.type = cfg.type === 'password' ? 'password' : 'text';
-      if (cfg.type === 'number') input.type = 'number';
-      input.name = key;
-      input.value = cfg.current || '';
-      div.appendChild(input);
-    }
-    form.appendChild(div);
-  }
-}
-
-function saveSettings() {
-  const form = document.getElementById('settingsForm');
-  const data = {};
-  for (const el of form.elements) {
-    if (el.name) data[el.name] = el.value;
-  }
-  api('/settings', {method: 'PUT', body: JSON.stringify(data)})
-    .then(r => { if (r.ok) toast('Configurações salvas! ✅'); else toast('Erro: ' + (r.error || 'desconhecido'), 'error'); });
-}
-
 // ── TTS Queue ─────────────────────────────────────────
-function loadTTSQueue() {
-  api('/tts-queue').then(r => {
-    const div = document.getElementById('ttsQueue');
-    if (!r.items || !r.items.length) {
-      div.innerHTML = '<p style="color:var(--muted)">Nenhum TTS pendente de aprovação.</p>';
-      return;
-    }
-    let html = '<table><tr><th>ID</th><th>Usuário</th><th>Texto</th><th>Áudio</th><th>Status</th><th>Ações</th></tr>';
-    for (const item of r.items) {
-      html += `<tr>
-        <td>${item.id}</td>
-        <td>${item.username || '-'}</td>
-        <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${item.texto_falado || ''}">${item.texto_falado || '-'}</td>
-        <td class="audio-cell">${item.audio_url ? `<audio controls src="${item.audio_url}"></audio>` : '-'}</td>
-        <td><span class="badge ${item.aprovado === null ? 'pending' : item.aprovado ? 'approved' : 'rejected'}">${item.aprovado === null ? 'pendente' : item.aprovado ? 'aprovado' : 'rejeitado'}</span></td>
-        <td>
-          ${item.aprovado === null ? `
-            <button class="btn small primary" onclick="approveTTS(${item.id})">✅</button>
-            <button class="btn small danger" onclick="rejectTTS(${item.id})">❌</button>
-          ` : '-'}
-        </td>
-      </tr>`;
-    }
-    html += '</table>';
-    div.innerHTML = html;
-  });
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-function approveTTS(id) { api('/tts-queue/' + id, {method: 'PUT', body: JSON.stringify({aprovado: true})}).then(r => { toast(r.ok ? 'Aprovado!' : 'Erro', r.ok ? 'success' : 'error'); loadTTSQueue(); }); }
-function rejectTTS(id) { api('/tts-queue/' + id, {method: 'PUT', body: JSON.stringify({aprovado: false})}).then(r => { toast(r.ok ? 'Rejeitado!' : 'Erro', r.ok ? 'success' : 'error'); loadTTSQueue(); }); }
+function renderTTSQueue(items) {
+  const div = document.getElementById('ttsQueue');
+  const atBottom = div.scrollHeight - div.scrollTop - div.clientHeight < 24;
+  if (!items || !items.length) {
+    div.innerHTML = '<p style="color:var(--muted)">Nenhum TTS concluído na fila.</p>';
+    return;
+  }
+  let html = '<table><tr><th>ID</th><th>Usuário</th><th>Texto</th><th>Áudio</th><th>Status</th><th>Ações</th></tr>';
+  for (const item of items) {
+    const state = item.aprovado === null ? 'pendente' : item.aprovado ? 'aprovado' : 'rejeitado';
+    html += `<tr>
+      <td>${item.id}</td>
+      <td>${escapeHtml(item.username || '-')}</td>
+      <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(item.texto_falado || '')}">${escapeHtml(item.texto_falado || '-')}</td>
+      <td class="audio-cell">${item.audio_url ? `<audio controls src="${escapeHtml(item.audio_url)}"></audio>` : '-'}</td>
+      <td><span class="badge ${state === 'pendente' ? 'pending' : state === 'aprovado' ? 'approved' : 'rejected'}">${state}</span></td>
+      <td>${item.aprovado === null ? `<button class="btn small primary" onclick="approveTTS(${item.id})">✅</button> <button class="btn small danger" onclick="rejectTTS(${item.id})">❌</button>` : '-'}</td>
+    </tr>`;
+  }
+  div.innerHTML = html + '</table>';
+  if (atBottom) div.scrollTop = div.scrollHeight;
+}
+
+function approveTTS(id) { api('/tts-queue/' + id, {method: 'PUT', body: JSON.stringify({aprovado: true})}).then(r => toast(r.ok ? 'Aprovado!' : 'Erro', r.ok ? 'success' : 'error')); }
+function rejectTTS(id) { api('/tts-queue/' + id, {method: 'PUT', body: JSON.stringify({aprovado: false})}).then(r => toast(r.ok ? 'Rejeitado!' : 'Erro', r.ok ? 'success' : 'error')); }
+
+let adminSocket;
+function connectAdminSocket() {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  adminSocket = new WebSocket(`${scheme}://${location.host}/admin/ws?token=${encodeURIComponent(TOKEN)}`);
+  adminSocket.onopen = () => { document.getElementById('statusText').textContent = 'Conectado'; };
+  adminSocket.onmessage = event => {
+    const message = JSON.parse(event.data);
+    if (message.type === 'tts_queue') renderTTSQueue(message.items);
+    if (message.type === 'tts_test_progress') appendTtsTestLog(message.message, message.error);
+    if (message.type === 'tts_test_result') showTtsTestResult(message);
+  };
+  adminSocket.onclose = () => {
+    document.getElementById('statusText').textContent = 'Reconectando...';
+    setTimeout(connectAdminSocket, 1000);
+  };
+}
+
+function appendTtsTestLog(message, error=false) {
+  const output = document.getElementById('ttsTestOutput');
+  output.classList.toggle('error', Boolean(error));
+  output.textContent += (output.textContent ? '\n' : '') + message;
+  output.scrollTop = output.scrollHeight;
+}
+
+function showTtsTestResult(message) {
+  if (message.error) appendTtsTestLog(message.error, true);
+  if (message.audio_url) {
+    appendTtsTestLog('Concluído: ' + message.audio_url);
+    const audio = document.getElementById('ttsTestAudio');
+    audio.src = message.audio_url;
+    audio.style.display = 'block';
+  }
+}
+
+function runTtsTest() {
+  const text = document.getElementById('ttsTestText').value.trim();
+  if (!text) return toast('Digite um texto.', 'error');
+  const payload = {
+    type: 'tts_test',
+    text,
+    provider: document.getElementById('ttsTestProvider').value,
+    voice: document.getElementById('ttsTestVoice').value.trim(),
+    elevenlabs_voice_id: document.getElementById('ttsTestElevenVoice').value.trim(),
+    elevenlabs_model_id: document.getElementById('ttsTestModel').value.trim(),
+    elevenlabs_output_format: document.getElementById('ttsTestFormat').value.trim(),
+  };
+  document.getElementById('ttsTestOutput').textContent = 'Solicitação:\n' + JSON.stringify(payload, null, 2);
+  document.getElementById('ttsTestAudio').style.display = 'none';
+  adminSocket.send(JSON.stringify(payload));
+}
 
 // ── Cleanup ───────────────────────────────────────────
 function loadAudioStats() {
@@ -321,13 +310,13 @@ function runSQL() {
 }
 
 // ── Init ──────────────────────────────────────────────
-api('/settings').then(r => { if (r.settings) buildSettingsForm(r.settings); });
 api('/ping').then(r => {
   const dot = document.getElementById('statusDot');
   const txt = document.getElementById('statusText');
   if (r.ok) { dot.className = 'status-dot online'; txt.textContent = 'Conectado'; }
   else { dot.className = 'status-dot offline'; txt.textContent = 'Offline'; }
 });
+connectAdminSocket();
 </script>
 </body>
 </html>"""
@@ -341,9 +330,11 @@ class AdminPanel:
         db: Database,
         settings: Settings,
         admin_token: str = "",
+        on_tts_changed: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self.db = db
         self.settings = settings
+        self.on_tts_changed = on_tts_changed
         self.admin_token = admin_token or os.getenv("ADMIN_TOKEN", "")
         if not self.admin_token:
             logger.warning("ADMIN_TOKEN not set — admin panel will be inaccessible!")
@@ -371,57 +362,38 @@ class AdminPanel:
             return self._auth_error()
         return web.json_response({"ok": True, "time": time.time()})
 
-    # ── API: Settings ──────────────────────────────────────────────
-
-    async def handle_get_settings(self, request: web.Request) -> web.Response:
-        if not self._check_auth(request):
-            return self._auth_error()
-        result = {}
-        for key, cfg in EDITABLE_SETTINGS.items():
-            result[key] = {
-                "label": cfg["label"],
-                "type": cfg["type"],
-                "current": os.getenv(cfg["env"], ""),
-            }
-            if "options" in cfg:
-                result[key]["options"] = cfg["options"]
-        return web.json_response({"settings": result})
-
-    async def handle_put_settings(self, request: web.Request) -> web.Response:
-        if not self._check_auth(request):
-            return self._auth_error()
-        try:
-            data = await request.json()
-        except Exception:
-            return web.json_response({"error": "Invalid JSON"}, status=400)
-
-        updated = []
-        for key, value in data.items():
-            if key in EDITABLE_SETTINGS:
-                env_key = EDITABLE_SETTINGS[key]["env"]
-                os.environ[env_key] = str(value)
-                updated.append(key)
-                logger.info("Admin: set %s=%s", env_key, str(value)[:50])
-
-        return web.json_response({"ok": True, "updated": updated})
-
     # ── API: TTS Queue ─────────────────────────────────────────────
+
+    async def get_tts_queue_items(self) -> list[dict[str, object]]:
+        rows = await self.db.fetch(
+            """
+            SELECT t.id, t.texto_original, t.texto_falado, t.audio_url, t.status,
+                   t.aprovado, u.nome AS username
+            FROM tts_solicitacoes t
+            JOIN usuarios u ON u.id = t.usuario_id
+            WHERE t.status = 'concluido'
+            ORDER BY t.criado_em ASC
+            LIMIT 50
+            """
+        )
+        return [
+            {
+                "id": r["id"],
+                "texto_original": r["texto_original"],
+                "texto_falado": r["texto_falado"],
+                "audio_url": r["audio_url"],
+                "status": r["status"],
+                "aprovado": r["aprovado"],
+                "username": r["username"],
+            }
+            for r in rows
+        ]
 
     async def handle_tts_queue(self, request: web.Request) -> web.Response:
         if not self._check_auth(request):
             return self._auth_error()
         try:
-            rows = await self.db.fetch(
-                """
-                SELECT t.id, t.texto_original, t.texto_falado, t.audio_url, t.status,
-                       t.aprovado, u.nome AS username
-                FROM tts_solicitacoes t
-                JOIN usuarios u ON u.id = t.usuario_id
-                WHERE t.status = 'concluido'
-                ORDER BY t.criado_em DESC
-                LIMIT 50
-                """
-            )
+            items = await self.get_tts_queue_items()
         except Exception:
             # Fallback: column 'aprovado' may not exist yet (pending migration)
             rows = await self.db.fetch(
@@ -431,21 +403,22 @@ class AdminPanel:
                 FROM tts_solicitacoes t
                 JOIN usuarios u ON u.id = t.usuario_id
                 WHERE t.status = 'concluido'
-                ORDER BY t.criado_em DESC
+                ORDER BY t.criado_em ASC
                 LIMIT 50
                 """
             )
-        items = []
-        for r in rows:
-            items.append({
-                "id": r["id"],
-                "texto_original": r["texto_original"],
-                "texto_falado": r["texto_falado"],
-                "audio_url": r["audio_url"],
-                "status": r["status"],
-                "aprovado": r["aprovado"],
-                "username": r["username"],
-            })
+            items = [
+                {
+                    "id": r["id"],
+                    "texto_original": r["texto_original"],
+                    "texto_falado": r["texto_falado"],
+                    "audio_url": r["audio_url"],
+                    "status": r["status"],
+                    "aprovado": r["aprovado"],
+                    "username": r["username"],
+                }
+                for r in rows
+            ]
         return web.json_response({"items": items, "count": len(items)})
 
     async def handle_tts_approve(self, request: web.Request) -> web.Response:
@@ -474,6 +447,8 @@ class AdminPanel:
                 status=500,
             )
         logger.info("Admin: TTS #%d %s", tts_id_int, "aprovado" if aprovado else "rejeitado")
+        if self.on_tts_changed is not None:
+            await self.on_tts_changed()
         return web.json_response({"ok": True, "id": tts_id_int, "aprovado": aprovado})
 
     # ── API: Audio Stats & Cleanup ─────────────────────────────────
@@ -559,8 +534,6 @@ class AdminPanel:
     def register_routes(self, app: web.Application) -> None:
         app.router.add_get("/admin", self.handle_page)
         app.router.add_get("/admin/api/ping", self.handle_ping)
-        app.router.add_get("/admin/api/settings", self.handle_get_settings)
-        app.router.add_put("/admin/api/settings", self.handle_put_settings)
         app.router.add_get("/admin/api/tts-queue", self.handle_tts_queue)
         app.router.add_put("/admin/api/tts-queue/{id}", self.handle_tts_approve)
         app.router.add_get("/admin/api/audio-stats", self.handle_audio_stats)

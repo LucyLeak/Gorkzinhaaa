@@ -26,7 +26,7 @@ Bot em Python para comentários do YouTube.
 ├── tts-backend/                       # ⚠️ Deprecado — remova em deploy
 └── youtube_bot/
     ├── __init__.py
-    ├── admin_panel.py                 # Painel admin web (config, TTS queue, limpeza, terminal)
+    ├── admin_panel.py                 # Painel admin web (fila TTS, teste, limpeza, terminal)
     ├── config.py                      # Settings via .env
     ├── main.py                        # Entry point do bot
     ├── tts_ws_server.py               # WebSocket server embutido para TTS + admin
@@ -410,10 +410,16 @@ Acessível em `/admin?token=SEU_ADMIN_TOKEN` no servidor do bot.
 
 | Aba | Funcionalidade |
 |---|---|
-| **⚙️ Configurações** | Editar 18 variáveis de ambiente em runtime (API keys, modelos, TTS, etc.) |
-| **🎙️ Fila TTS** | Aprovar ou rejeitar áudios TTS enviados por usuários |
+| **🎙️ Fila TTS** | Fila atualizada em tempo real via WebSocket; aprovar ou rejeitar áudios |
+| **🧪 Teste TTS** | Gerar áudio isolado com provedor, voz/idioma e parâmetros suportados |
 | **🗑️ Limpeza** | Ver estatísticas de áudio e executar limpeza (dry-run ou real) |
 | **💻 Terminal** | Executar queries SQL (SELECT/WITH/EXPLAIN/SHOW) diretamente no banco |
+
+As atualizações administrativas usam `ws(s)://SEU_HOST/admin/ws?token=SEU_ADMIN_TOKEN`.
+O protocolo usa `tts_queue` para snapshots da fila. O terminal envia `tts_test` com
+`text`, `provider`, `voice`, `elevenlabs_voice_id`, `elevenlabs_model_id` e
+`elevenlabs_output_format`; o servidor responde com `tts_test_progress` e
+`tts_test_result`. Testes TTS não inserem registros em `tts_solicitacoes`.
 
 ### Segurança
 
