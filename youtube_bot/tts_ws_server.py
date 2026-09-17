@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,9 +43,12 @@ class TtsWebSocketServer:
         self.poll_interval = poll_interval
         self.settings = settings
         self._clients: set[web.WebSocketResponse] = set()
+        self._admin_clients: set[web.WebSocketResponse] = set()
         self._app = web.Application()
         self._runner: web.AppRunner | None = None
         self._poll_task: asyncio.Task[None] | None = None
+        self._admin_poll_task: asyncio.Task[None] | None = None
+        self._admin_queue_signature: str | None = None
         self._site: web.TCPSite | None = None
 
         # Ensure the TTS audio directory exists (needed for static route and TTS generation)
@@ -54,14 +58,18 @@ class TtsWebSocketServer:
         # Routes
         self._app.router.add_get("/", self._handle_health)
         self._app.router.add_get("/ws", self._handle_websocket)
+        self._app.router.add_get("/admin/ws", self._handle_admin_websocket)
         self._app.router.add_get("/health", self._handle_health)
         self._app.router.add_get("/pending-tts", self._handle_pending_tts)
-        self._app.router.add_get("/tts-test", self._handle_tts_test)
         # Serve local TTS audio files as fallback when Catbox is down
         self._app.router.add_static("/audio/", self._audio_dir, show_index=False)
 
-        # Admin panel (runtime settings, TTS approval, cleanup, terminal)
-        self._admin = AdminPanel(db=self.db, settings=self.settings)
+        # Admin panel (TTS approval, cleanup, terminal)
+        self._admin = AdminPanel(
+            db=self.db,
+            settings=self.settings,
+            on_tts_changed=self._broadcast_admin_queue,
+        )
         self._admin.register_routes(self._app)
 
     async def start(self) -> None:
@@ -76,6 +84,7 @@ class TtsWebSocketServer:
             self.port,
         )
         self._poll_task = asyncio.create_task(self._poll_loop())
+        self._admin_poll_task = asyncio.create_task(self._admin_queue_loop())
 
     async def stop(self) -> None:
         """Stop the poller and shut down the HTTP server."""
@@ -83,6 +92,12 @@ class TtsWebSocketServer:
             self._poll_task.cancel()
             try:
                 await self._poll_task
+            except asyncio.CancelledError:
+                pass
+        if self._admin_poll_task:
+            self._admin_poll_task.cancel()
+            try:
+                await self._admin_poll_task
             except asyncio.CancelledError:
                 pass
         if self._runner:
@@ -108,6 +123,29 @@ class TtsWebSocketServer:
             logger.info("🔌 TTS WS client disconnected (total: %d)", len(self._clients))
         return ws
 
+    async def _handle_admin_websocket(self, request: web.Request) -> web.WebSocketResponse:
+        if not self._admin._check_auth(request):
+            return web.Response(status=401, text="Unauthorized")
+
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        self._admin_clients.add(ws)
+        try:
+            await self._send_admin_queue(ws)
+            async for msg in ws:
+                if msg.type != aiohttp.WSMsgType.TEXT:
+                    continue
+                try:
+                    payload = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    await self._send_json(ws, {"type": "tts_test_progress", "message": "Payload inválido.", "error": True})
+                    continue
+                if payload.get("type") == "tts_test":
+                    await self._run_tts_test(ws, payload)
+        finally:
+            self._admin_clients.discard(ws)
+        return ws
+
     async def _handle_health(self, request: web.Request) -> web.Response:
         return web.json_response({"status": "ok", "clients": len(self._clients)})
 
@@ -124,6 +162,82 @@ class TtsWebSocketServer:
                 logger.exception("TTS WS poll error, retrying in %ds.", self.poll_interval)
             await asyncio.sleep(self.poll_interval)
 
+    async def _admin_queue_loop(self) -> None:
+        while True:
+            try:
+                await self._broadcast_admin_queue()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Admin TTS queue update failed.")
+            await asyncio.sleep(0.5)
+
+    async def _send_json(self, ws: web.WebSocketResponse, payload: dict) -> None:
+        await ws.send_str(json.dumps(payload, ensure_ascii=False, default=str))
+
+    async def _send_admin_queue(self, ws: web.WebSocketResponse) -> None:
+        items = await self._admin.get_tts_queue_items()
+        await self._send_json(ws, {"type": "tts_queue", "items": items})
+
+    async def _broadcast_admin_queue(self) -> None:
+        if not self._admin_clients:
+            return
+        items = await self._admin.get_tts_queue_items()
+        signature = json.dumps(items, sort_keys=True, ensure_ascii=False, default=str)
+        if signature == self._admin_queue_signature:
+            return
+        self._admin_queue_signature = signature
+        payload = {"type": "tts_queue", "items": items}
+        dead: list[web.WebSocketResponse] = []
+        for ws in list(self._admin_clients):
+            try:
+                await self._send_json(ws, payload)
+            except (ConnectionError, asyncio.TimeoutError):
+                dead.append(ws)
+        for ws in dead:
+            self._admin_clients.discard(ws)
+
+    async def _run_tts_test(self, ws: web.WebSocketResponse, payload: dict) -> None:
+        if self.settings is None:
+            await self._send_json(ws, {"type": "tts_test_progress", "message": "Configuração TTS indisponível.", "error": True})
+            return
+
+        from youtube_bot.fun.tts import generate_tts, sanitize_tts_text, upload_tts_audio
+
+        text = sanitize_tts_text(str(payload.get("text") or ""))
+        if not text:
+            await self._send_json(ws, {"type": "tts_test_progress", "message": "O texto ficou vazio após a limpeza.", "error": True})
+            return
+
+        provider = str(payload.get("provider") or self.settings.tts_provider).strip().lower()
+        voice = str(payload.get("voice") or self.settings.tts_voice).strip()
+        test_settings = replace(
+            self.settings,
+            tts_provider=provider,
+            tts_voice=voice,
+            elevenlabs_voice_id=str(payload.get("elevenlabs_voice_id") or self.settings.elevenlabs_voice_id),
+            elevenlabs_model_id=str(payload.get("elevenlabs_model_id") or self.settings.elevenlabs_model_id),
+            elevenlabs_output_format=str(payload.get("elevenlabs_output_format") or self.settings.elevenlabs_output_format),
+        )
+        await self._send_json(ws, {"type": "tts_test_progress", "message": "Iniciando síntese..."})
+        try:
+            await self._send_json(ws, {"type": "tts_test_progress", "message": "Sintetizando..."})
+            audio_path = await generate_tts(text, test_settings, self.db, user_id=0, voice=voice)
+            await self._send_json(ws, {"type": "tts_test_progress", "message": "Enviando áudio..."})
+            audio_url = await upload_tts_audio(audio_path, test_settings)
+            if not audio_url:
+                raise RuntimeError("Não foi possível obter uma URL pública para o áudio.")
+            await self._send_json(ws, {
+                "type": "tts_test_result",
+                "ok": True,
+                "audio_url": audio_url,
+                "provider": provider,
+                "voice": voice,
+            })
+        except Exception as exc:
+            logger.exception("Admin TTS test failed.")
+            await self._send_json(ws, {"type": "tts_test_result", "ok": False, "error": str(exc)})
+
     async def _poll_once(self) -> None:
         if not self._clients:
             return  # nobody connected, skip the query
@@ -137,7 +251,7 @@ class TtsWebSocketServer:
                 audio_url=str(row.get("audio_url") or ""),
             )
 
-    # ── HTTP test endpoints ─────────────────────────────────────────
+    # ── HTTP queue endpoint ─────────────────────────────────────────
 
     async def _handle_pending_tts(self, request: web.Request) -> web.Response:
         """GET /pending-tts — Lista TTS concluídos pendentes de broadcast."""
@@ -155,62 +269,6 @@ class TtsWebSocketServer:
                 for r in rows
             ],
         })
-
-    async def _handle_tts_test(self, request: web.Request) -> web.Response:
-        """GET /tts-test?text=... — Gera um TTS de teste e faz broadcast via WebSocket.
-
-        Query params:
-            text  — Frase para sintetizar (default: "Teste TTS via HTTP")
-            voice — Voz (opcional, sobrescreve config)
-        """
-        if self.settings is None:
-            return web.json_response(
-                {"error": "TTS settings not configured on this server"},
-                status=503,
-            )
-
-        from youtube_bot.fun.tts import generate_tts, sanitize_tts_text, upload_tts_audio
-
-        text = request.query.get("text", "Teste TTS via HTTP do bot Gorkzinhaaa!")
-        voice = request.query.get("voice")
-        texto_falado = sanitize_tts_text(text)
-
-        try:
-            # Ensure a system user exists for TTS test requests
-            sys_user = await models.upsert_user(self.db, "__tts_system__", "TTS System")
-            sys_user_id = int(sys_user["id"])
-
-            # Insert into DB so the poller can broadcast it
-            tts_id = await models.insert_tts_request(self.db, sys_user_id, text, texto_falado)
-            await models.update_tts_status(self.db, tts_id, "processando")
-
-            audio_path = await generate_tts(texto_falado, self.settings, self.db, user_id=sys_user_id, voice=voice)
-            public_url = await upload_tts_audio(audio_path, self.settings)
-
-            if public_url:
-                await models.update_tts_status(self.db, tts_id, "concluido", audio_url=public_url)
-                # Immediately broadcast to all connected clients
-                await self._broadcast_tts(tts_id, "HTTP Tester", texto_falado, public_url)
-                return web.json_response({
-                    "ok": True,
-                    "text": text,
-                    "audio_url": public_url,
-                    "provider": self.settings.tts_provider,
-                    "voice": voice or self.settings.tts_voice,
-                })
-            else:
-                await models.update_tts_status(self.db, tts_id, "erro", erro="Falha ao enviar audio TTS (Catbox offline e sem fallback local).")
-                return web.json_response({
-                    "ok": False,
-                    "error": "Catbox upload failed and no local fallback available",
-                    "local_path": audio_path,
-                }, status=502)
-        except Exception as exc:
-            logger.exception("TTS test endpoint error")
-            return web.json_response({
-                "ok": False,
-                "error": str(exc),
-            }, status=500)
 
     async def _broadcast_tts(
         self, tts_id: int, username: str, message: str, audio_url: str
