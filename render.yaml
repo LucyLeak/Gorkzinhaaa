@@ -97,5 +97,11 @@ services:
         sync: false
       - key: ADMIN_TEST_USERNAME
         sync: false
+      - key: API_ALLOWED_ORIGINS
+        sync: false
+      - key: API_TTS_WAIT_TIMEOUT_SECONDS
+        sync: false
+      - key: API_TTS_MAX_CONCURRENT
+        sync: false
       - key: MEMORY_RETENTION_DAYS
         sync: false

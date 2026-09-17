@@ -78,6 +78,9 @@ class Settings:
     log_level: str
     admin_test_user_id: int
     admin_test_username: str
+    api_allowed_origins: tuple[str, ...]
+    api_tts_wait_timeout_seconds: int
+    api_tts_max_concurrent: int
 
     @property
     def has_youtube_oauth(self) -> bool:
@@ -175,6 +178,9 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         admin_test_user_id=_int(os.getenv("ADMIN_TEST_USER_ID"), 999999999),
         admin_test_username=os.getenv("ADMIN_TEST_USERNAME", "[admin]"),
+        api_allowed_origins=_split_csv(os.getenv("API_ALLOWED_ORIGINS")),
+        api_tts_wait_timeout_seconds=_int(os.getenv("API_TTS_WAIT_TIMEOUT_SECONDS"), 15),
+        api_tts_max_concurrent=_int(os.getenv("API_TTS_MAX_CONCURRENT"), 5),
     )
 
 

@@ -81,6 +81,16 @@ CREATE TABLE IF NOT EXISTS tts_solicitacoes (
     concluido_em TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS api_clients (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
+    scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_api_clients_active ON api_clients(id) WHERE revoked_at IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_mensagens_timestamp
     ON mensagens(timestamp);
 
@@ -112,6 +122,11 @@ ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS personalidade TEXT;
 ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS personalidade_notas TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_youtube_channel_id
     ON usuarios(youtube_channel_id) WHERE youtube_channel_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS api_clients (
+    id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL,
+    scopes TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), revoked_at TIMESTAMPTZ
+);
 """
 
 
@@ -181,6 +196,37 @@ async def ensure_admin_test_user(db: Database, user_id: int, username: str) -> N
     )
 
 
+async def create_api_client(
+    db: Database, name: str, key_hash: str, scopes: list[str],
+) -> dict[str, Any]:
+    row = await db.fetchrow(
+        """INSERT INTO api_clients (name, key_hash, scopes)
+           VALUES ($1, $2, $3) RETURNING id, name, scopes, created_at, revoked_at""",
+        name, key_hash, scopes,
+    )
+    return dict(row) if row else {}
+
+
+async def list_api_clients(db: Database) -> list[dict[str, Any]]:
+    rows = await db.fetch(
+        "SELECT id, name, scopes, created_at, revoked_at FROM api_clients ORDER BY created_at DESC"
+    )
+    return [dict(row) for row in rows]
+
+
+async def revoke_api_client(db: Database, client_id: int) -> bool:
+    result = await db.execute(
+        "UPDATE api_clients SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1",
+        client_id,
+    )
+    return result.endswith("1")
+
+
+async def get_api_client_by_id(db: Database, client_id: int) -> dict[str, Any] | None:
+    row = await db.fetchrow("SELECT * FROM api_clients WHERE id = $1", client_id)
+    return dict(row) if row else None
+
+
 async def insert_admin_tts_request(
     db: Database, user_id: int, raw_text: str, spoken_text: str,
     audio_url: str | None = None, status: str = "processando", erro: str | None = None,
@@ -189,7 +235,8 @@ async def insert_admin_tts_request(
         """
         INSERT INTO tts_solicitacoes
             (usuario_id, texto_original, texto_falado, audio_url, status, erro, concluido_em, aprovado)
-        VALUES ($1, $2, $3, $4, $5, $6, now(), true)
+        VALUES ($1, $2, $3, $4, $5, $6,
+                CASE WHEN $5 IN ('concluido', 'erro') THEN now() ELSE NULL END, true)
         RETURNING id
         """,
         user_id, raw_text, spoken_text, audio_url, status, erro,
