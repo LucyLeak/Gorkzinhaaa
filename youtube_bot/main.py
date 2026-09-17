@@ -43,6 +43,25 @@ logger = logging.getLogger(__name__)
 LIVE_DISCOVERY_INTERVAL = 60
 
 
+def _normalize_youtube_handle(value: str) -> str:
+    return value.strip().lstrip("@").casefold()
+
+
+def _is_bot_author(
+    author_channel_id: str,
+    author_name: str,
+    bot_channel_id: str,
+    bot_handle: str,
+) -> bool:
+    if bot_channel_id and author_channel_id == bot_channel_id:
+        return True
+    return bool(
+        bot_handle
+        and _normalize_youtube_handle(author_name)
+        == _normalize_youtube_handle(bot_handle)
+    )
+
+
 async def main() -> None:
     settings = load_settings()
     configure_logging(settings.log_level)
@@ -192,6 +211,7 @@ async def main() -> None:
                 director=director,
                 video_id=video_id,
                 bot_channel_id=settings.youtube_bot_channel_id,
+                bot_handle=settings.youtube_bot_handle,
                 connect_message=settings.youtube_live_connect_message,
             ),
             channel_id=settings.youtube_channel_id,
@@ -220,6 +240,7 @@ async def main() -> None:
                         director=director,
                         video_id=live_video_id,
                         bot_channel_id=settings.youtube_bot_channel_id,
+                        bot_handle=settings.youtube_bot_handle,
                         connect_message=settings.youtube_live_connect_message,
                         known_live_ids=known_live_ids,
                     )
@@ -230,6 +251,7 @@ async def main() -> None:
                         director=director,
                         channel_id=channel_id,
                         bot_channel_id=settings.youtube_bot_channel_id,
+                        bot_handle=settings.youtube_bot_handle,
                         connect_message=settings.youtube_live_connect_message,
                         known_live_ids=known_live_ids,
                     )
@@ -246,7 +268,9 @@ async def main() -> None:
                 try:
                     await poll_video_comments(
                         youtube_client, director,
-                        settings.youtube_bot_channel_id, last_seen_by_video,
+                        settings.youtube_bot_channel_id,
+                        settings.youtube_bot_handle,
+                        last_seen_by_video,
                     )
                 except YouTubeQuotaExceededError:
                     quota_pause_until = now + 3600
@@ -273,6 +297,7 @@ async def connect_to_live_video(
     director: Director,
     video_id: str,
     bot_channel_id: str,
+    bot_handle: str,
     connect_message: str,
     known_live_ids: set[str],
 ) -> None:
@@ -295,6 +320,7 @@ async def connect_to_live_video(
             live_chat_id=live_chat_id,
             video_id=video_id,
             bot_channel_id=bot_channel_id,
+            bot_handle=bot_handle,
             connect_message=connect_message,
         )
     )
@@ -307,6 +333,7 @@ async def start_scheduled_live_chat(
     director: Director,
     video_id: str,
     bot_channel_id: str,
+    bot_handle: str,
     connect_message: str,
 ) -> asyncio.Task[LiveChatStopReason]:
     live_chat_id = await youtube_client.get_active_live_chat_id(video_id)
@@ -318,6 +345,7 @@ async def start_scheduled_live_chat(
             live_chat_id=live_chat_id,
             video_id=video_id,
             bot_channel_id=bot_channel_id,
+            bot_handle=bot_handle,
             connect_message=connect_message,
         )
     )
@@ -329,6 +357,7 @@ async def discover_and_connect_lives(
     director: Director,
     channel_id: str,
     bot_channel_id: str,
+    bot_handle: str,
     connect_message: str,
     known_live_ids: set[str],
 ) -> bool:
@@ -365,6 +394,7 @@ async def discover_and_connect_lives(
                 live_chat_id=live["live_chat_id"],
                 video_id=live_id,
                 bot_channel_id=bot_channel_id,
+                bot_handle=bot_handle,
                 connect_message=connect_message,
             )
         )
@@ -379,6 +409,7 @@ async def poll_live_chat(
     live_chat_id: str,
     video_id: str,
     bot_channel_id: str,
+    bot_handle: str,
     connect_message: str,
 ) -> LiveChatStopReason:
     """Loop de polling do chat ao vivo de uma live especifica."""
@@ -413,7 +444,12 @@ async def poll_live_chat(
                 )
             else:
                 for msg in messages:
-                    if bot_channel_id and msg.author_channel_id == bot_channel_id:
+                    if _is_bot_author(
+                        msg.author_channel_id,
+                        msg.author_name,
+                        bot_channel_id,
+                        bot_handle,
+                    ):
                         continue
                     await process_live_message(live_client, director, msg, live_chat_id)
 
@@ -502,6 +538,7 @@ async def poll_video_comments(
     youtube_client: YouTubeClient,
     director: Director,
     bot_channel_id: str,
+    bot_handle: str,
     last_seen_by_video: dict,
 ) -> None:
     for video_id, last_seen in list(last_seen_by_video.items()):
@@ -523,7 +560,12 @@ async def poll_video_comments(
         # Filter out bot's own comments
         user_comments = [
             c for c in comments
-            if not (bot_channel_id and c.author_channel_id == bot_channel_id)
+            if not _is_bot_author(
+                c.author_channel_id,
+                c.author_name,
+                bot_channel_id,
+                bot_handle,
+            )
         ]
 
         if not user_comments:
