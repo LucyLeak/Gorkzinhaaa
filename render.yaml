@@ -33,6 +33,8 @@ services:
         sync: false
       - key: YOUTUBE_BOT_CHANNEL_ID
         sync: false
+      - key: YOUTUBE_BOT_HANDLE
+        sync: false
       - key: YOUTUBE_LIVE_URL
         sync: false
       - key: YOUTUBE_LIVE_SCHEDULE_ENABLED

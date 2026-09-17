@@ -436,7 +436,14 @@ As atualizações administrativas usam `ws(s)://SEU_HOST/admin/ws?token=SEU_ADMI
 O protocolo usa `tts_queue` para snapshots da fila. O terminal envia `tts_test` com
 `text`, `provider`, `voice`, `elevenlabs_voice_id`, `elevenlabs_model_id` e
 `elevenlabs_output_format`; o servidor responde com `tts_test_progress` e
-`tts_test_result`. Testes TTS não inserem registros em `tts_solicitacoes`.
+`tts_test_result`. Testes TTS são salvos em `tts_solicitacoes` com o usuário
+administrativo reservado.
+
+Para evitar que o bot responda às próprias mensagens, configure o handle em
+`YOUTUBE_BOT_HANDLE` (padrão: `@GorkNerdolinha`). A comparação ignora `@` e
+diferenças entre maiúsculas/minúsculas e vale para lives e comentários. O handle
+administrativo `@lucy.voluvel-polisipo` não é ignorado e continua recebendo
+respostas normalmente.
 
 ### Segurança
 

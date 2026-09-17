@@ -46,6 +46,7 @@ class Settings:
     youtube_channel_handle: str
     youtube_video_ids: tuple[str, ...]
     youtube_bot_channel_id: str
+    youtube_bot_handle: str
     youtube_live_url: str
     youtube_live_connect_message: str
     youtube_live_schedule_enabled: bool
@@ -117,6 +118,7 @@ def load_settings() -> Settings:
         youtube_channel_handle=os.getenv("YOUTUBE_CHANNEL_HANDLE", ""),
         youtube_video_ids=_split_csv(os.getenv("YOUTUBE_VIDEO_IDS")),
         youtube_bot_channel_id=os.getenv("YOUTUBE_BOT_CHANNEL_ID", ""),
+        youtube_bot_handle=os.getenv("YOUTUBE_BOT_HANDLE", "@GorkNerdolinha"),
         youtube_live_url=os.getenv("YOUTUBE_LIVE_URL", ""),
         youtube_live_connect_message=os.getenv(
             "YOUTUBE_LIVE_CONNECT_MESSAGE",
