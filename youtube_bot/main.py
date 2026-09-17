@@ -113,19 +113,30 @@ async def main() -> None:
 
     # ── Resolver channel ID a partir do @handle ──────────────────────
     live_video_id: str | None = None
-    if settings.youtube_live_url:
-        live_video_id = extract_youtube_video_id(settings.youtube_live_url)
-        if not live_video_id:
-            raise RuntimeError(
-                "YOUTUBE_LIVE_URL deve ser uma URL de live do YouTube ou um video_id valido."
-            )
-        logger.info("Modo live direta ativo: video_id=%s", live_video_id)
-
     scheduled_channel_mode = bool(
         settings.youtube_live_schedule_enabled
-        and not live_video_id
         and (settings.youtube_channel_id or settings.youtube_channel_handle)
     )
+
+    live_url = settings.youtube_live_url.strip()
+    if live_url:
+        live_video_id = extract_youtube_video_id(live_url)
+        if not live_video_id:
+            if scheduled_channel_mode:
+                logger.warning(
+                    "YOUTUBE_LIVE_URL=%r nao e valido; ignorando-o e usando a "
+                    "descoberta agendada do canal.",
+                    live_url,
+                )
+            else:
+                raise RuntimeError(
+                    "YOUTUBE_LIVE_URL deve ser uma URL de live do YouTube "
+                    "ou um video_id valido."
+                )
+        else:
+            logger.info("Modo live direta ativo: video_id=%s", live_video_id)
+
+    scheduled_channel_mode = bool(scheduled_channel_mode and not live_video_id)
 
     channel_id: str | None = settings.youtube_channel_id or None
     if settings.youtube_channel_handle and not live_video_id and not scheduled_channel_mode:
