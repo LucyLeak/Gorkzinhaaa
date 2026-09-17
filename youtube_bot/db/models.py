@@ -92,8 +92,6 @@ CREATE TABLE IF NOT EXISTS api_clients (
     revoked_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_api_clients_active ON api_clients(id) WHERE revoked_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_api_clients_key_prefix ON api_clients(key_prefix)
-    WHERE revoked_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_mensagens_timestamp
     ON mensagens(timestamp);
@@ -103,8 +101,6 @@ CREATE INDEX IF NOT EXISTS idx_respostas_timestamp
 
 CREATE INDEX IF NOT EXISTS idx_tts_criado_em
     ON tts_solicitacoes(criado_em);
-CREATE INDEX IF NOT EXISTS idx_tts_source
-    ON tts_solicitacoes(source);
 
 CREATE INDEX IF NOT EXISTS idx_memorias_criado_em
     ON memorias_semanticas(criado_em);
