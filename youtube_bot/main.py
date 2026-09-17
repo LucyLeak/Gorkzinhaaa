@@ -113,19 +113,23 @@ async def main() -> None:
 
     # ── Resolver channel ID a partir do @handle ──────────────────────
     live_video_id: str | None = None
-    if settings.youtube_live_url:
-        live_video_id = extract_youtube_video_id(settings.youtube_live_url)
-        if not live_video_id:
-            raise RuntimeError(
-                "YOUTUBE_LIVE_URL deve ser uma URL de live do YouTube ou um video_id valido."
-            )
-        logger.info("Modo live direta ativo: video_id=%s", live_video_id)
-
     scheduled_channel_mode = bool(
         settings.youtube_live_schedule_enabled
-        and not live_video_id
         and (settings.youtube_channel_id or settings.youtube_channel_handle)
     )
+
+    live_url = settings.youtube_live_url.strip()
+    if live_url:
+        live_video_id = extract_youtube_video_id(live_url)
+        if not live_video_id:
+            logger.warning(
+                "YOUTUBE_LIVE_URL=%r nao e valido; ignorando-o.",
+                live_url,
+            )
+        else:
+            logger.info("Modo live direta ativo: video_id=%s", live_video_id)
+
+    scheduled_channel_mode = bool(scheduled_channel_mode and not live_video_id)
 
     channel_id: str | None = settings.youtube_channel_id or None
     if settings.youtube_channel_handle and not live_video_id and not scheduled_channel_mode:
@@ -174,6 +178,7 @@ async def main() -> None:
         return
 
     scheduled_monitor_task: asyncio.Task[None] | None = None
+    scheduled_monitor: ScheduledLiveMonitor | None = None
     if scheduled_channel_mode:
         scheduled_monitor = ScheduledLiveMonitor(
             youtube_client=youtube_client,
@@ -248,6 +253,8 @@ async def main() -> None:
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Bot encerrado pelo usuario (Ctrl+C).")
     finally:
+        if scheduled_monitor is not None:
+            await scheduled_monitor.stop()
         if scheduled_monitor_task is not None:
             scheduled_monitor_task.cancel()
             await asyncio.gather(scheduled_monitor_task, return_exceptions=True)
