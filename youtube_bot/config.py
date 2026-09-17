@@ -42,11 +42,19 @@ class Settings:
     youtube_client_secret: str
     youtube_refresh_token: str
     youtube_api_key: str
+    youtube_channel_id: str
     youtube_channel_handle: str
     youtube_video_ids: tuple[str, ...]
     youtube_bot_channel_id: str
     youtube_live_url: str
     youtube_live_connect_message: str
+    youtube_live_schedule_enabled: bool
+    youtube_live_schedule_timezone: str
+    youtube_live_schedule_days: tuple[str, ...]
+    youtube_live_schedule_start: str
+    youtube_live_schedule_end: str
+    youtube_live_schedule_poll_minutes: int
+    youtube_live_resume_grace_minutes: int
     giphy_api_key: str
     tts_provider: str
     tts_voice: str
@@ -103,6 +111,7 @@ def load_settings() -> Settings:
         youtube_client_secret=os.getenv("YOUTUBE_CLIENT_SECRET", ""),
         youtube_refresh_token=os.getenv("YOUTUBE_REFRESH_TOKEN", ""),
         youtube_api_key=os.getenv("YOUTUBE_API_KEY", ""),
+        youtube_channel_id=os.getenv("YOUTUBE_CHANNEL_ID", ""),
         youtube_channel_handle=os.getenv("YOUTUBE_CHANNEL_HANDLE", ""),
         youtube_video_ids=_split_csv(os.getenv("YOUTUBE_VIDEO_IDS")),
         youtube_bot_channel_id=os.getenv("YOUTUBE_BOT_CHANNEL_ID", ""),
@@ -110,6 +119,27 @@ def load_settings() -> Settings:
         youtube_live_connect_message=os.getenv(
             "YOUTUBE_LIVE_CONNECT_MESSAGE",
             "Bot conectada ao chat ao vivo.",
+        ),
+        youtube_live_schedule_enabled=_bool(
+            os.getenv("YOUTUBE_LIVE_SCHEDULE_ENABLED"), True
+        ),
+        youtube_live_schedule_timezone=os.getenv(
+            "YOUTUBE_LIVE_SCHEDULE_TIMEZONE", "America/Sao_Paulo"
+        ),
+        youtube_live_schedule_days=_split_csv(
+            os.getenv("YOUTUBE_LIVE_SCHEDULE_DAYS", "mon,wed,fri,sun")
+        ),
+        youtube_live_schedule_start=os.getenv(
+            "YOUTUBE_LIVE_SCHEDULE_START", "18:00"
+        ),
+        youtube_live_schedule_end=os.getenv(
+            "YOUTUBE_LIVE_SCHEDULE_END", "23:59"
+        ),
+        youtube_live_schedule_poll_minutes=_int(
+            os.getenv("YOUTUBE_LIVE_SCHEDULE_POLL_MINUTES"), 5
+        ),
+        youtube_live_resume_grace_minutes=_int(
+            os.getenv("YOUTUBE_LIVE_RESUME_GRACE_MINUTES"), 30
         ),
         giphy_api_key=os.getenv("GIPHY_API_KEY", ""),
         tts_provider=os.getenv("TTS_PROVIDER", "gtts").strip().lower(),

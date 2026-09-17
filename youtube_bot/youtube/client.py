@@ -24,6 +24,14 @@ class YouTubeQuotaExceededError(RuntimeError):
     """Raised when the YouTube API quota bucket is exhausted."""
 
 
+class YouTubeLiveEndedError(RuntimeError):
+    """Raised when the API reports that a live chat or broadcast has ended."""
+
+
+class YouTubeLiveChatUnavailableError(RuntimeError):
+    """Raised when a live broadcast does not expose an active chat."""
+
+
 @dataclass
 class YouTubeComment:
     comment_id: str
@@ -51,6 +59,12 @@ class YouTubeClient:
             except HttpError as exc:
                 if _is_quota_exceeded(exc):
                     raise YouTubeQuotaExceededError(_http_error_message(exc)) from exc
+                if _is_live_chat_unavailable(exc):
+                    raise YouTubeLiveChatUnavailableError(
+                        _http_error_message(exc)
+                    ) from exc
+                if _is_live_chat_ended(exc):
+                    raise YouTubeLiveEndedError(_http_error_message(exc)) from exc
                 raise
             except ssl.SSLError:
                 if attempt < max_ssl_retries:
@@ -153,10 +167,16 @@ class YouTubeClient:
         if not items:
             raise RuntimeError(f"Video nao encontrado: {video_id}")
 
+        snippet = items[0].get("snippet") or {}
+        if snippet.get("liveBroadcastContent") not in {None, "live"}:
+            raise YouTubeLiveEndedError(
+                f"A live {video_id} nao esta mais ao vivo."
+            )
+
         details = items[0].get("liveStreamingDetails") or {}
         live_chat_id = details.get("activeLiveChatId")
         if not live_chat_id:
-            raise RuntimeError(
+            raise YouTubeLiveChatUnavailableError(
                 "Nao encontrei chat ativo para esse video. "
                 "Confira se a live esta ao vivo e com chat habilitado."
             )
@@ -165,7 +185,14 @@ class YouTubeClient:
     def _get_video_live_details(self, service, video_id: str):
         return (
             service.videos()
-            .list(part="liveStreamingDetails,snippet", id=video_id)
+            .list(
+                part="liveStreamingDetails,snippet",
+                id=video_id,
+                fields=(
+                    "items(id,snippet/liveBroadcastContent,"
+                    "liveStreamingDetails/activeLiveChatId)"
+                ),
+            )
             .execute()
         )
 
@@ -261,6 +288,39 @@ class YouTubeClient:
                 logger.exception("Falha ao obter detalhes da live %s", video_id)
         return lives
 
+    async def find_active_live_video_id(self, channel_id: str) -> str | None:
+        """Retorna o ID da live ativa mais recente de um canal publico.
+
+        ``search.list(eventType=live)`` e o unico endpoint da Data API que
+        permite filtrar, para um canal publico de terceiro, apenas as
+        transmissoes que estao ao vivo. A resposta e limitada a um item e a
+        somente o ID do video para reduzir trafego e processamento.
+        """
+        service = self._build_service()
+        payload = await self._call_api(
+            self._search_one_active_live, service, channel_id
+        )
+        items = payload.get("items", [])
+        if not items:
+            return None
+        return (items[0].get("id") or {}).get("videoId")
+
+    def _search_one_active_live(self, service, channel_id: str):
+        return (
+            service.search()
+            .list(
+                # ``snippet`` e a parte obrigatoria deste recurso; ``fields``
+                # abaixo faz a API devolver somente o videoId de que precisamos.
+                part="snippet",
+                channelId=channel_id,
+                eventType="live",
+                type="video",
+                maxResults=1,
+                fields="items(id/videoId)",
+            )
+            .execute()
+        )
+
     def _search_active_lives(self, service, channel_id: str):
         return (
             service.search()
@@ -282,6 +342,32 @@ def _is_quota_exceeded(exc: HttpError) -> bool:
         "quota exceeded" in content
         or "quotaexceeded" in content
         or "ratelimitexceeded" in content
+    )
+
+
+def _is_live_chat_ended(exc: HttpError) -> bool:
+    status = getattr(exc.resp, "status", None)
+    content = _decode_http_error_content(exc).lower()
+    return status in {403, 404} and any(
+        marker in content
+        for marker in (
+            "livechatended",
+            "livechatnotfound",
+            "live chat ended",
+            "live chat not found",
+        )
+    )
+
+
+def _is_live_chat_unavailable(exc: HttpError) -> bool:
+    status = getattr(exc.resp, "status", None)
+    content = _decode_http_error_content(exc).lower()
+    return status == 403 and any(
+        marker in content
+        for marker in (
+            "livechatdisabled",
+            "live chat disabled",
+        )
     )
 
 
