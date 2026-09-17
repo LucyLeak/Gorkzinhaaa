@@ -138,7 +138,8 @@ class AdminPanel:
                    t.aprovado, t.source, u.id AS usuario_id, u.nome AS username
             FROM tts_solicitacoes t
             JOIN usuarios u ON u.id = t.usuario_id
-            WHERE t.status = 'concluido' AND t.source IN ('admin', 'live')
+            WHERE t.status IN ('pendente', 'processando', 'concluido')
+              AND t.source IN ('admin', 'live')
             ORDER BY t.criado_em ASC
             LIMIT 50
             """
@@ -170,7 +171,8 @@ class AdminPanel:
                        NULL AS aprovado, t.source, u.nome AS username
                 FROM tts_solicitacoes t
                 JOIN usuarios u ON u.id = t.usuario_id
-                WHERE t.status = 'concluido' AND t.source IN ('admin', 'live')
+                WHERE t.status IN ('pendente', 'processando', 'concluido')
+                  AND t.source IN ('admin', 'live')
                 ORDER BY t.criado_em ASC
                 LIMIT 50
                 """
