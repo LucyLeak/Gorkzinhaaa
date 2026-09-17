@@ -133,7 +133,7 @@ def load_settings() -> Settings:
             "YOUTUBE_LIVE_SCHEDULE_START", "18:00"
         ),
         youtube_live_schedule_end=os.getenv(
-            "YOUTUBE_LIVE_SCHEDULE_END", "23:59"
+            "YOUTUBE_LIVE_SCHEDULE_END", "19:00"
         ),
         youtube_live_schedule_poll_minutes=_int(
             os.getenv("YOUTUBE_LIVE_SCHEDULE_POLL_MINUTES"), 5

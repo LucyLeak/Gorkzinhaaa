@@ -99,6 +99,13 @@ YOUTUBE_CHANNEL_HANDLE=@SlendermanGames   # @handle do canal a monitorar (detect
 YOUTUBE_VIDEO_IDS=video_id_1,video_id_2   # Opcional: IDs fixos de videos (comentarios)
 YOUTUBE_BOT_CHANNEL_ID=...                 # ID do canal do bot (evita auto-resposta)
 YOUTUBE_LIVE_URL=                          # Opcional: URL/ID de uma live especifica (evita search.list)
+YOUTUBE_LIVE_SCHEDULE_ENABLED=true         # Descoberta automatica em dias/horarios configurados
+YOUTUBE_LIVE_SCHEDULE_TIMEZONE=America/Sao_Paulo
+YOUTUBE_LIVE_SCHEDULE_DAYS=mon,wed,fri,sun
+YOUTUBE_LIVE_SCHEDULE_START=18:00
+YOUTUBE_LIVE_SCHEDULE_END=19:00
+YOUTUBE_LIVE_SCHEDULE_POLL_MINUTES=5
+YOUTUBE_LIVE_RESUME_GRACE_MINUTES=30
 
 # ── Giphy ─────────────────────────────────────────
 GIPHY_API_KEY=...

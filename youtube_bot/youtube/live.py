@@ -3,11 +3,18 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 from youtube_bot.youtube.client import YouTubeClient
 from youtube_bot.utils.helpers import parse_youtube_datetime
 
 logger = logging.getLogger(__name__)
+
+
+class LiveChatStopReason(str, Enum):
+    ENDED = "ended"
+    QUOTA_EXCEEDED = "quota_exceeded"
+    CONNECTION_ERROR = "connection_error"
 
 
 @dataclass

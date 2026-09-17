@@ -213,6 +213,7 @@ class ScheduledLiveMonitor:
         self._active_task: asyncio.Task[LiveChatStopReason] | None = None
         self._standby_until: datetime | None = None
         self._finished_on: date | None = None
+        self._standby_cutoff = time(21, 0)
 
     async def run(self) -> None:
         logger.info(
@@ -397,6 +398,10 @@ class ScheduledLiveMonitor:
             self._finish_today("quota excedida durante o chat")
             return
 
+        if self._now().timetz().replace(tzinfo=None) >= self._standby_cutoff:
+            self._finish_today("live encerrada apos 21:00")
+            return
+
         self._standby_until = self._now() + self.schedule.resume_grace
         logger.warning(
             "Chat da live %s encerrou (%s). Entrando em standby ate %s para verificar "
@@ -411,7 +416,7 @@ class ScheduledLiveMonitor:
         if standby_until is None:
             return
 
-        if now >= standby_until:
+        if now >= standby_until or now.timetz().replace(tzinfo=None) >= self._standby_cutoff:
             logger.info(
                 "A live nao voltou dentro do standby de %s minutos. Descoberta "
                 "desativada ate a proxima janela agendada.",
@@ -427,7 +432,11 @@ class ScheduledLiveMonitor:
             return
 
         await self._sleep_until(
-            min(self._now() + self.schedule.poll_interval, standby_until)
+            min(
+                self._now() + self.schedule.poll_interval,
+                standby_until,
+                datetime.combine(now.date(), self._standby_cutoff, tzinfo=self.schedule.zone),
+            )
         )
 
     def _finish_today(self, reason: str) -> None:
