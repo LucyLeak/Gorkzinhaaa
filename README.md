@@ -527,3 +527,20 @@ Isso garante que o TTS sempre funcione, mesmo se o Catbox estiver offline.
 | O que | Motivo |
 |---|---|
 | Servidor Bun (`tts-backend/`) como dependência ativa | Substituído pelo WebSocket embutido no Python (público via HTTPS do deploy) |
+
+## API pública
+
+A documentação interativa (sem autenticação) está em `/docs` e `/api/docs`.
+O painel administrativo cria chaves na aba **API Clients**; a chave completa é
+exibida uma única vez e nunca é armazenada em texto puro. Todas as respostas de
+erro usam `{"error":{"code":"...","message":"..."}}`.
+
+* `POST /api/v1/tts` (escopo `tts:generate`) recebe `text`, `provider` e `voice` opcionais. Retorna `202` para polling ou `200` com `?wait=true`/`Prefer: wait=15`.
+* `GET /api/v1/tts/{id}` aceita `tts:generate` ou `status:read`.
+* `GET /api/v1/status` exige `status:read`; `GET /api/v1/health` é público.
+* `wss://HOST/api/v1/ws?key=...` exige `tts:subscribe`, envia `hello` e eventos `tts`, e permite cinco conexões por chave.
+
+Variáveis de operação: `API_ALLOWED_ORIGINS` (CORS, separadas por vírgula),
+`API_TTS_WAIT_TIMEOUT_SECONDS` (padrão 15) e `API_TTS_MAX_CONCURRENT` (padrão 5).
+O painel não usa framework: tokens CSS centralizados e a preferência do tema
+claro é persistida em `localStorage`.

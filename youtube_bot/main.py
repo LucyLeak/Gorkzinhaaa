@@ -150,6 +150,7 @@ async def main() -> None:
             )
         else:
             logger.info("Modo live direta ativo: video_id=%s", live_video_id)
+            tts_ws.set_live_video_id(live_video_id)
 
     scheduled_channel_mode = bool(scheduled_channel_mode and not live_video_id)
 
