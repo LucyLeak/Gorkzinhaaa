@@ -30,9 +30,12 @@ from youtube_bot.validation.validator import Validator
 from youtube_bot.youtube.client import (
     YouTubeClient,
     YouTubeComment,
+    YouTubeLiveEndedError,
     YouTubeQuotaExceededError,
 )
 from youtube_bot.youtube.live import LiveChatClient, YouTubeLiveMessage
+from youtube_bot.youtube.live import LiveChatStopReason
+from youtube_bot.youtube.schedule import LiveDiscoverySchedule, ScheduledLiveMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -118,8 +121,14 @@ async def main() -> None:
             )
         logger.info("Modo live direta ativo: video_id=%s", live_video_id)
 
-    channel_id: str | None = None
-    if settings.youtube_channel_handle and not live_video_id:
+    scheduled_channel_mode = bool(
+        settings.youtube_live_schedule_enabled
+        and not live_video_id
+        and (settings.youtube_channel_id or settings.youtube_channel_handle)
+    )
+
+    channel_id: str | None = settings.youtube_channel_id or None
+    if settings.youtube_channel_handle and not live_video_id and not scheduled_channel_mode:
         channel_id = await youtube_client.resolve_channel_id(
             settings.youtube_channel_handle
         )
@@ -142,7 +151,12 @@ async def main() -> None:
     known_live_ids: set[str] = set()
     live_discovery_enabled = True
 
-    if not live_video_id and not channel_id and not settings.youtube_video_ids:
+    if (
+        not live_video_id
+        and not channel_id
+        and not settings.youtube_video_ids
+        and not scheduled_channel_mode
+    ):
         logger.warning(
             "Nenhuma fonte do YouTube configurada. "
             "O TTS WebSocket server continuara rodando em ws://%s:%s/ws. "
@@ -158,6 +172,25 @@ async def main() -> None:
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
         return
+
+    scheduled_monitor_task: asyncio.Task[None] | None = None
+    if scheduled_channel_mode:
+        scheduled_monitor = ScheduledLiveMonitor(
+            youtube_client=youtube_client,
+            schedule=LiveDiscoverySchedule.from_settings(settings),
+            start_live_chat=lambda video_id: start_scheduled_live_chat(
+                youtube_client=youtube_client,
+                live_client=live_client,
+                director=director,
+                video_id=video_id,
+                bot_channel_id=settings.youtube_bot_channel_id,
+                connect_message=settings.youtube_live_connect_message,
+            ),
+            channel_id=settings.youtube_channel_id,
+            channel_handle=settings.youtube_channel_handle,
+        )
+        scheduled_monitor_task = asyncio.create_task(scheduled_monitor.run())
+        logger.info("Modo de agenda de lives ativado.")
 
     quota_pause_until: float = 0  # timestamp until which to skip YouTube API calls
 
@@ -182,7 +215,7 @@ async def main() -> None:
                         connect_message=settings.youtube_live_connect_message,
                         known_live_ids=known_live_ids,
                     )
-                elif channel_id and live_discovery_enabled:
+                elif channel_id and live_discovery_enabled and not scheduled_channel_mode:
                     live_discovery_enabled = await discover_and_connect_lives(
                         youtube_client=youtube_client,
                         live_client=live_client,
@@ -215,6 +248,9 @@ async def main() -> None:
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Bot encerrado pelo usuario (Ctrl+C).")
     finally:
+        if scheduled_monitor_task is not None:
+            scheduled_monitor_task.cancel()
+            await asyncio.gather(scheduled_monitor_task, return_exceptions=True)
         await tts_ws.stop()
         await db.close()
 
@@ -242,6 +278,29 @@ async def connect_to_live_video(
     known_live_ids.add(video_id)
     logger.info("Conectando diretamente na live %s (chat_id=%s)", video_id, live_chat_id)
     asyncio.create_task(
+        poll_live_chat(
+            youtube_client=youtube_client,
+            live_client=live_client,
+            director=director,
+            live_chat_id=live_chat_id,
+            video_id=video_id,
+            bot_channel_id=bot_channel_id,
+            connect_message=connect_message,
+        )
+    )
+
+
+async def start_scheduled_live_chat(
+    *,
+    youtube_client: YouTubeClient,
+    live_client: LiveChatClient,
+    director: Director,
+    video_id: str,
+    bot_channel_id: str,
+    connect_message: str,
+) -> asyncio.Task[LiveChatStopReason]:
+    live_chat_id = await youtube_client.get_active_live_chat_id(video_id)
+    return asyncio.create_task(
         poll_live_chat(
             youtube_client=youtube_client,
             live_client=live_client,
@@ -311,7 +370,7 @@ async def poll_live_chat(
     video_id: str,
     bot_channel_id: str,
     connect_message: str,
-) -> None:
+) -> LiveChatStopReason:
     """Loop de polling do chat ao vivo de uma live especifica."""
     logger.info("Conectado ao chat ao vivo: %s (video=%s)", live_chat_id, video_id)
 
@@ -356,7 +415,10 @@ async def poll_live_chat(
                 "Cota da API do YouTube esgotada no chat %s. Pausando live chat.",
                 live_chat_id,
             )
-            return  # Stop immediately — no point retrying until quota resets
+            return LiveChatStopReason.QUOTA_EXCEEDED
+        except YouTubeLiveEndedError:
+            logger.info("A live %s terminou.", video_id)
+            return LiveChatStopReason.ENDED
         except ssl.SSLError:
             consecutive_errors += 1
             logger.warning(
@@ -369,7 +431,7 @@ async def poll_live_chat(
                     "Muitos erros SSL no chat %s. Desconectando.",
                     live_chat_id,
                 )
-                return
+                return LiveChatStopReason.CONNECTION_ERROR
             await asyncio.sleep(10)
         except Exception:
             consecutive_errors += 1
@@ -383,7 +445,7 @@ async def poll_live_chat(
                     "Muitos erros no chat %s. Live pode ter terminado. Desconectando.",
                     live_chat_id,
                 )
-                return
+                return LiveChatStopReason.CONNECTION_ERROR
             await asyncio.sleep(10)
 
 
