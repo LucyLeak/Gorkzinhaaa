@@ -122,17 +122,10 @@ async def main() -> None:
     if live_url:
         live_video_id = extract_youtube_video_id(live_url)
         if not live_video_id:
-            if scheduled_channel_mode:
-                logger.warning(
-                    "YOUTUBE_LIVE_URL=%r nao e valido; ignorando-o e usando a "
-                    "descoberta agendada do canal.",
-                    live_url,
-                )
-            else:
-                raise RuntimeError(
-                    "YOUTUBE_LIVE_URL deve ser uma URL de live do YouTube "
-                    "ou um video_id valido."
-                )
+            logger.warning(
+                "YOUTUBE_LIVE_URL=%r nao e valido; ignorando-o.",
+                live_url,
+            )
         else:
             logger.info("Modo live direta ativo: video_id=%s", live_video_id)
 
@@ -185,6 +178,7 @@ async def main() -> None:
         return
 
     scheduled_monitor_task: asyncio.Task[None] | None = None
+    scheduled_monitor: ScheduledLiveMonitor | None = None
     if scheduled_channel_mode:
         scheduled_monitor = ScheduledLiveMonitor(
             youtube_client=youtube_client,
@@ -259,6 +253,8 @@ async def main() -> None:
     except (KeyboardInterrupt, asyncio.CancelledError):
         logger.info("Bot encerrado pelo usuario (Ctrl+C).")
     finally:
+        if scheduled_monitor is not None:
+            await scheduled_monitor.stop()
         if scheduled_monitor_task is not None:
             scheduled_monitor_task.cancel()
             await asyncio.gather(scheduled_monitor_task, return_exceptions=True)
