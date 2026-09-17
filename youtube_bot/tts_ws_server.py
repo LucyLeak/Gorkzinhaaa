@@ -25,6 +25,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 API_TTS_USER_ID = 999999998
 
+
+def _isoformat_or_none(value: object) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
 API_DOCS_HTML = r"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>API Gorkzinhaaa</title>
 <style>:root{color-scheme:dark;--bg:#0b1020;--card:#141d35;--line:#29385c;--text:#e8eefc;--muted:#9eadd0;--accent:#73a7ff}
@@ -412,7 +421,8 @@ class TtsWebSocketServer:
         return {
             "id": row["id"], "status": row.get("status"), "audio_url": row.get("audio_url"),
             "text": row.get("texto_original"), "error": row.get("erro"),
-            "created_at": row.get("criado_em"), "completed_at": row.get("concluido_em"),
+            "created_at": _isoformat_or_none(row.get("criado_em")),
+            "completed_at": _isoformat_or_none(row.get("concluido_em")),
         }
 
     async def _handle_api_tts_item(self, request: web.Request) -> web.Response:
@@ -621,7 +631,7 @@ class TtsWebSocketServer:
         row = await models.get_tts_request(self.db, tts_id)
         api_payload = {"type": "tts", "id": tts_id, "username": username,
                        "message": message, "audio": audio_url,
-                       "created_at": row.get("criado_em") if row else None}
+                       "created_at": _isoformat_or_none(row.get("criado_em")) if row else None}
         if tts_id not in self._api_broadcasted:
             for api_ws in list(self._api_clients):
                 try:
