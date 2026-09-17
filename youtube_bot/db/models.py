@@ -11,7 +11,10 @@ CREATE EXTENSION IF NOT EXISTS vector;
 CREATE TABLE IF NOT EXISTS usuarios (
     id BIGSERIAL PRIMARY KEY,
     youtube_id TEXT UNIQUE NOT NULL,
+    youtube_channel_id TEXT UNIQUE,
     nome TEXT,
+    personalidade TEXT,
+    personalidade_notas TEXT,
     primeiro_contato TIMESTAMPTZ NOT NULL DEFAULT now(),
     total_interacoes INTEGER NOT NULL DEFAULT 0,
     pontos INTEGER NOT NULL DEFAULT 0,
@@ -103,6 +106,12 @@ BEGIN
         ALTER TABLE tts_solicitacoes ADD COLUMN aprovado BOOLEAN DEFAULT NULL;
     END IF;
 END $$;
+-- 004/005: identity and personality columns for existing installations
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS youtube_channel_id TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS personalidade TEXT;
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS personalidade_notas TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usuarios_youtube_channel_id
+    ON usuarios(youtube_channel_id) WHERE youtube_channel_id IS NOT NULL;
 """
 
 
@@ -111,26 +120,136 @@ async def initialize_schema(db: Database) -> None:
     await db.execute(MIGRATIONS_SQL)
 
 
-async def upsert_user(db: Database, youtube_id: str, nome: str | None) -> dict[str, Any]:
-    row = await db.fetchrow(
+async def upsert_user(
+    db: Database,
+    youtube_id: str,
+    nome: str | None,
+    youtube_channel_id: str | None = None,
+) -> dict[str, Any]:
+    row = None
+    if youtube_channel_id:
+        row = await db.fetchrow(
+            "SELECT * FROM usuarios WHERE youtube_channel_id = $1",
+            youtube_channel_id,
+        )
+    if row is None:
+        row = await db.fetchrow("SELECT * FROM usuarios WHERE youtube_id = $1", youtube_id)
+    if row:
+        row = await db.fetchrow(
+            """
+            UPDATE usuarios
+            SET youtube_id = COALESCE($2, youtube_id),
+                nome = COALESCE($3, nome),
+                youtube_channel_id = COALESCE($4, youtube_channel_id),
+                total_interacoes = total_interacoes + 1
+            WHERE id = $1
+            RETURNING *
+            """,
+            row["id"], youtube_id, nome, youtube_channel_id,
+        )
+    else:
+        row = await db.fetchrow(
         """
-        INSERT INTO usuarios (youtube_id, nome, total_interacoes)
-        VALUES ($1, $2, 1)
-        ON CONFLICT (youtube_id)
-        DO UPDATE SET
-            nome = COALESCE(EXCLUDED.nome, usuarios.nome),
-            total_interacoes = usuarios.total_interacoes + 1
+        INSERT INTO usuarios (youtube_id, youtube_channel_id, nome, total_interacoes)
+        VALUES ($1, $2, $3, 1)
         RETURNING *
         """,
-        youtube_id,
-        nome,
-    )
+        youtube_id, youtube_channel_id, nome,
+        )
     return dict(row) if row else {}
 
 
 async def get_user_history(db: Database, youtube_id: str) -> dict[str, Any]:
     row = await db.fetchrow("SELECT * FROM usuarios WHERE youtube_id = $1", youtube_id)
     return dict(row) if row else {}
+
+
+async def ensure_admin_test_user(db: Database, user_id: int, username: str) -> None:
+    # Usuário administrativo reservado para o Terminal de Teste TTS.
+    # Necessário porque tts_solicitacoes.usuario_id tem FK para usuarios.id.
+    # ID alto (999999999) para nunca colidir com usuários reais do YouTube.
+    # youtube_id='[admin]' é seguro: IDs de canal do YouTube começam com 'UC'
+    # e handles começam com '@'. Se youtube_channel_id virar NOT NULL no
+    # futuro, este seed precisa ser ajustado para um valor fake.
+    await db.execute(
+        """
+        INSERT INTO usuarios (id, youtube_id, nome, personalidade)
+        VALUES ($1, $2, $2, 'neutro')
+        ON CONFLICT (id) DO NOTHING
+        """,
+        user_id, username,
+    )
+
+
+async def insert_admin_tts_request(
+    db: Database, user_id: int, raw_text: str, spoken_text: str,
+    audio_url: str | None = None, status: str = "processando", erro: str | None = None,
+) -> int:
+    return await db.fetchval(
+        """
+        INSERT INTO tts_solicitacoes
+            (usuario_id, texto_original, texto_falado, audio_url, status, erro, concluido_em, aprovado)
+        VALUES ($1, $2, $3, $4, $5, $6, now(), true)
+        RETURNING id
+        """,
+        user_id, raw_text, spoken_text, audio_url, status, erro,
+    )
+
+
+async def update_admin_tts_request(
+    db: Database, tts_id: int, status: str, audio_url: str | None = None,
+    erro: str | None = None,
+) -> None:
+    await db.execute(
+        """
+        UPDATE tts_solicitacoes
+        SET status = $2, audio_url = $3, erro = $4, concluido_em = now(), aprovado = true
+        WHERE id = $1
+        """,
+        tts_id, status, audio_url, erro,
+    )
+
+
+async def list_personality_users(
+    db: Database, search: str = "", limit: int = 50, offset: int = 0,
+) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+    term = f"%{search.strip()}%"
+    rows = await db.fetch(
+        """
+        SELECT u.id, u.youtube_channel_id, u.youtube_id, u.nome, u.personalidade,
+               u.personalidade_notas, m.ultimo_contato
+        FROM usuarios u
+        LEFT JOIN LATERAL (
+            SELECT max(timestamp) AS ultimo_contato FROM mensagens WHERE usuario_id = u.id
+        ) m ON true
+        WHERE ($1 = '%%' OR COALESCE(u.youtube_channel_id, '') ILIKE $1
+               OR u.youtube_id ILIKE $1 OR COALESCE(u.nome, '') ILIKE $1)
+        ORDER BY COALESCE(m.ultimo_contato, u.primeiro_contato) DESC
+        LIMIT $2 OFFSET $3
+        """, term, limit, offset,
+    )
+    count = await db.fetchval(
+        """SELECT count(*) FROM usuarios
+           WHERE ($1 = '%%' OR COALESCE(youtube_channel_id, '') ILIKE $1
+              OR youtube_id ILIKE $1 OR COALESCE(nome, '') ILIKE $1)""", term,
+    )
+    counts = await db.fetch(
+        "SELECT COALESCE(personalidade, 'neutro') AS personalidade, count(*) AS total "
+        "FROM usuarios GROUP BY COALESCE(personalidade, 'neutro')"
+    )
+    return [dict(row) for row in rows], int(count or 0), {
+        str(row["personalidade"]): int(row["total"]) for row in counts
+    }
+
+
+async def update_user_personality(
+    db: Database, channel_id: str, personality: str | None, notes: str | None,
+) -> bool:
+    result = await db.execute(
+        """UPDATE usuarios SET personalidade = $2, personalidade_notas = $3
+           WHERE youtube_channel_id = $1""", channel_id, personality, notes,
+    )
+    return result.endswith("1")
 
 
 async def insert_message(db: Database, user_id: int, content: str, message_type: str) -> int:

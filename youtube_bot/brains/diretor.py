@@ -63,8 +63,13 @@ class Director:
         user_youtube_id: str,
         display_name: str | None,
         message_type: str = "comment",
+        author_channel_id: str | None = None,
     ) -> DirectorReply:
-        user = await models.upsert_user(self.db, user_youtube_id, display_name)
+        user = await models.upsert_user(
+            self.db, user_youtube_id, display_name, author_channel_id
+        )
+        user["personalidade"] = user.get("personalidade") or "neutro"
+        # TODO: disponibilizar personalidade/notas ao contexto quando o comportamento for ativado.
         user_id = int(user["id"])
         await models.insert_message(self.db, user_id, user_message, message_type)
 

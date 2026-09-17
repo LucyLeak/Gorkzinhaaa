@@ -12,7 +12,7 @@ from youtube_bot.brains.cerebro_a import CerebroA
 from youtube_bot.brains.cerebro_b import CerebroB
 from youtube_bot.brains.diretor import Director
 from youtube_bot.config import load_settings
-from youtube_bot.db.models import initialize_schema
+from youtube_bot.db.models import ensure_admin_test_user, initialize_schema
 from youtube_bot.db.pool import Database
 from youtube_bot.fun.giphy import GiphyClient
 from youtube_bot.fun.trivia import TriviaGame
@@ -53,6 +53,9 @@ async def main() -> None:
     db = Database(settings.database_url)
     await db.connect()
     await initialize_schema(db)
+    await ensure_admin_test_user(
+        db, settings.admin_test_user_id, settings.admin_test_username
+    )
 
     openai_client = (
         AsyncOpenAI(
@@ -464,11 +467,14 @@ async def process_live_message(
 ) -> None:
     """Processa uma mensagem do chat ao vivo e responde."""
     try:
+        if not message.author_channel_id:
+            logger.warning("Mensagem live sem author_channel_id; usando nome como fallback.")
         reply = await director.decide_and_respond(
             user_message=message.text,
             user_youtube_id=message.author_channel_id or message.author_name,
             display_name=message.author_name,
             message_type="live",
+            author_channel_id=message.author_channel_id or None,
         )
         thought, message_text = prepare_chat_message(reply.text)
         if thought:
@@ -547,11 +553,14 @@ async def process_comment(
     comment: YouTubeComment,
 ) -> None:
     try:
+        if not comment.author_channel_id:
+            logger.warning("Comentário sem author_channel_id; usando nome como fallback.")
         reply = await director.decide_and_respond(
             user_message=comment.text,
             user_youtube_id=comment.author_channel_id or comment.author_name,
             display_name=comment.author_name,
             message_type="comment",
+            author_channel_id=comment.author_channel_id or None,
         )
         thought, message_text = prepare_chat_message(reply.text)
         if thought:
