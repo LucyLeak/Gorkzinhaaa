@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import re
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -68,6 +69,25 @@ def extract_tts_message(message: str) -> str | None:
     return text
 
 
+def parse_tts_command(message: str) -> tuple[str | None, str, bool] | None:
+    """Returns (provider, text, used_default) for a !tts command."""
+    match = _TTS_COMMAND_PATTERN.match(message)
+    if not match:
+        return None
+    raw = (match.group(1) or "").strip()
+    if not raw:
+        return None
+    parts = raw.split(maxsplit=1)
+    candidate = _normalize_provider(parts[0])
+    if candidate in {"gtts", "edge", "openai", "elevenlabs"}:
+        if len(parts) == 1:
+            return candidate, "", False
+        return candidate, parts[1].strip(), False
+    if candidate in {"google", "polly", "azure", "eleven", "coqui"}:
+        return candidate, parts[1].strip() if len(parts) > 1 else "", False
+    return None, raw, True
+
+
 def _text_hash(text: str) -> str:
     """Gera um hash curto do texto para nome do arquivo."""
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
@@ -112,6 +132,8 @@ async def generate_tts(
     db: Database,
     user_id: int,
     voice: str | None = None,
+    model: str | None = None,
+    load_runtime_settings: bool = True,
 ) -> str:
     """
     Gera audio TTS a partir do texto e salva em disco.
@@ -120,9 +142,29 @@ async def generate_tts(
     output_dir = Path(settings.tts_output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if load_runtime_settings:
+        runtime_values = await models.get_settings(
+            db,
+            ["elevenlabs_voice_id", "elevenlabs_model_id", "elevenlabs_output_format"],
+        )
+        if runtime_values:
+            settings = replace(
+                settings,
+                elevenlabs_voice_id=runtime_values.get(
+                    "elevenlabs_voice_id", settings.elevenlabs_voice_id
+                ),
+                elevenlabs_model_id=runtime_values.get(
+                    "elevenlabs_model_id", settings.elevenlabs_model_id
+                ),
+                elevenlabs_output_format=runtime_values.get(
+                    "elevenlabs_output_format", settings.elevenlabs_output_format
+                ),
+            )
     provider = _provider_or_raise(settings)
     selected_voice = _selected_voice(provider, settings, voice)
-    model_id = settings.elevenlabs_model_id if provider == "elevenlabs" else ""
+    model_id = (
+        (model or settings.elevenlabs_model_id) if provider == "elevenlabs" else ""
+    )
     file_hash = _cache_hash(text, provider, selected_voice, model_id)
     file_path = output_dir / f"tts_{file_hash}.mp3"
 
@@ -132,7 +174,18 @@ async def generate_tts(
         return str(file_path)
 
     if provider == "elevenlabs":
-        return await _generate_elevenlabs_tts(text, file_path, settings, selected_voice)
+        try:
+            return await _generate_elevenlabs_tts(
+                text, file_path, settings, selected_voice, model=model
+            )
+        except Exception as exc:
+            logger.warning(
+                "ElevenLabs falhou; usando gTTS como fallback: %s", exc
+            )
+            fallback_path = output_dir / f"tts_{_cache_hash(text, 'gtts', 'pt')}.mp3"
+            if fallback_path.exists():
+                return str(fallback_path)
+            return await _generate_gtts(text, fallback_path, "pt")
     if provider == "edge":
         return await _generate_edge_tts(text, file_path, selected_voice)
     if provider == "openai":
@@ -171,6 +224,7 @@ async def _generate_elevenlabs_tts(
     file_path: Path,
     settings: Settings,
     voice_id: str,
+    model: str | None = None,
 ) -> str:
     """Gera audio usando a API Text-to-Speech da ElevenLabs."""
     import aiohttp
@@ -183,7 +237,7 @@ async def _generate_elevenlabs_tts(
     params = {"output_format": settings.elevenlabs_output_format or "mp3_44100_128"}
     payload = {
         "text": text,
-        "model_id": settings.elevenlabs_model_id or "eleven_flash_v2_5",
+        "model_id": model or settings.elevenlabs_model_id or "eleven_flash_v2_5",
     }
     headers = {
         "xi-api-key": api_key,
@@ -202,7 +256,13 @@ async def _generate_elevenlabs_tts(
                 )
 
     await asyncio.to_thread(file_path.write_bytes, body)
-    logger.info("Audio TTS (ElevenLabs) salvo em: %s", file_path)
+    logger.info(
+        "Audio TTS (ElevenLabs) salvo: voice=%s model=%s chars=%d formato=%s",
+        voice_id,
+        payload["model_id"],
+        len(text),
+        params["output_format"],
+    )
     return str(file_path)
 
 
@@ -332,9 +392,16 @@ async def handle_tts_command(
     Processa o comando !tts.
     Retorna a mensagem de resposta ou None se nao for comando TTS.
     """
-    raw_text = extract_tts_message(message)
-    if raw_text is None:
-        return None
+    parsed = parse_tts_command(message)
+    if parsed is None:
+        return "!tts: uso: !tts [gtts|elevenlabs] mensagem" if _TTS_COMMAND_PATTERN.match(message) else None
+    requested_provider, raw_text, used_default = parsed
+    if requested_provider and requested_provider not in {
+        "gtts", "edge", "openai", "elevenlabs"
+    }:
+        return "Provedor inválido. Use: gtts, elevenlabs, edge ou openai."
+    if not raw_text:
+        return "!tts: uso: !tts [gtts|elevenlabs] mensagem"
 
     texto_falado = sanitize_tts_text(raw_text)
     if not texto_falado:
@@ -359,13 +426,20 @@ async def handle_tts_command(
     await models.update_tts_status(db, tts_id, "processando")
 
     try:
-        audio_path = await generate_tts(texto_falado, settings, db, user_id)
+        provider = requested_provider or _normalize_provider(settings.tts_provider or "gtts")
+        audio_path = await generate_tts(
+            texto_falado,
+            replace(settings, tts_provider=provider),
+            db,
+            user_id,
+        )
 
         # Upload with retry (Catbox 2x, then local fallback)
         public_url = await upload_tts_audio(audio_path, settings)
         if public_url:
             await models.update_tts_status(db, tts_id, "concluido", audio_url=public_url)
-            return f"Audio TTS gerado: {public_url}"
+            hint = " Use '!tts elevenlabs mensagem' para escolher o provedor." if used_default else ""
+            return f"Audio TTS gerado: {public_url}.{hint}"
 
         await models.update_tts_status(
             db,

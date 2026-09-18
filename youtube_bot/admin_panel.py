@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from aiohttp import web
+import aiohttp
 
 from youtube_bot.db import models
 from youtube_bot.db.pool import Database
@@ -26,22 +27,28 @@ if TYPE_CHECKING:
     from youtube_bot.config import Settings
 
 logger = logging.getLogger(__name__)
+ELEVENLABS_FORMATS = (
+    "mp3_44100_128", "mp3_44100_192", "mp3_22050_32",
+    "pcm_16000", "pcm_22050", "pcm_24000", "pcm_44100",
+)
 
 ADMIN_HTML = r"""<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gorkzinhaaa ? Admin</title><style>
 :root{--bg:#080c16;--surface:#111827;--surface2:#17233a;--line:#293956;--text:#e9efff;--muted:#9aa9c5;--accent:#76a9ff;--ok:#38d39f;--danger:#ff6b7a;--warn:#f7c96b;--shadow:0 16px 50px #0005} [data-theme=light]{--bg:#f3f6fc;--surface:#fff;--surface2:#edf3ff;--line:#d5deee;--text:#17223a;--muted:#5c6b85;--accent:#356ee8;--shadow:0 10px 30px #34507822}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px Inter,system-ui,sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}.shell{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.side{background:var(--surface);border-right:1px solid var(--line);padding:22px 14px;position:sticky;top:0;height:100vh}.brand{font-size:20px;font-weight:800;color:var(--accent);padding:0 12px 26px}.nav{display:grid;gap:5px}.nav button{border:0;background:transparent;color:var(--muted);text-align:left;padding:12px;border-radius:10px}.nav button:hover,.nav button.active{background:var(--surface2);color:var(--text)}.side-foot{position:absolute;bottom:20px;left:25px;color:var(--muted);font-size:12px}.side-foot a{color:var(--accent)}main{min-width:0}.top{height:70px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;background:var(--surface)}.top h1{font-size:18px;margin:0}.status{color:var(--muted)}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:7px}.content{max-width:1200px;padding:28px;margin:auto}.panel{display:none}.panel.active{display:block}.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:18px;box-shadow:var(--shadow)}h2{font-size:16px;margin:0 0 8px}.muted{color:var(--muted);font-size:13px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.stat{background:var(--surface2);border-radius:11px;padding:15px}.stat b{display:block;font-size:23px;color:var(--accent)}label{display:block;color:var(--muted);font-size:12px;margin:12px 0 5px}input,select,textarea{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:10px}textarea{min-height:100px;resize:vertical}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.btn{border:1px solid var(--line);background:var(--surface2);color:var(--text);padding:9px 14px;border-radius:8px}.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}.btn.danger{color:#fff;background:var(--danger);border-color:var(--danger)}.btn.small{padding:5px 9px;font-size:12px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:11px 9px;border-bottom:1px solid var(--line);white-space:nowrap}th{color:var(--muted);font-size:12px}.badge{border-radius:99px;padding:3px 9px;font-size:11px;background:var(--surface2)}.badge.ok{color:var(--ok)}.badge.bad{color:var(--danger)}.badge.wait{color:var(--warn)}pre{background:var(--bg);padding:14px;overflow:auto;border-radius:8px;min-height:80px}.toast{position:fixed;right:22px;bottom:22px;background:var(--surface2);border:1px solid var(--line);padding:12px 16px;border-radius:9px;box-shadow:var(--shadow);z-index:4}.mobile{display:none}@media(max-width:760px){.shell{display:block}.side{height:auto;position:static;border-right:0;border-bottom:1px solid var(--line);padding:12px}.brand{padding:8px}.nav{display:flex;overflow:auto}.nav button{white-space:nowrap}.side-foot{display:none}.top{padding:0 16px}.content{padding:16px}.mobile{display:block}}
-</style></head><body><div class="shell"><aside class="side"><div class="brand">? Gorkzinhaaa</div><nav class="nav" aria-label="Navegação"><button class="active" data-panel="tts">??? Fila TTS</button><button data-panel="tts-test">?? Teste TTS</button><button data-panel="personalidades">?? Personalidades</button><button data-panel="cleanup">?? Limpeza</button><button data-panel="terminal">? Terminal</button><button data-panel="clients">?? API Clients</button></nav><div class="side-foot"><a href="/docs">Documentação da API</a><br><a href="/">Início</a></div></aside><main><header class="top"><h1 id="title">Fila de aprovação</h1><div class="row"><button class="btn small" id="theme" aria-label="Alternar tema">? Tema</button><span class="status"><i class="dot" id="dot"></i><span id="statusText">Conectando</span></span></div></header><section class="content">
+ </style></head><body><div class="shell"><aside class="side"><div class="brand">? Gorkzinhaaa</div><nav class="nav" aria-label="Navegação"><button class="active" data-panel="tts">??? Fila TTS</button><button data-panel="tts-test">?? Teste TTS</button><button data-panel="elevenlabs">?? ElevenLabs</button><button data-panel="personalidades">?? Personalidades</button><button data-panel="cleanup">?? Limpeza</button><button data-panel="terminal">? Terminal</button><button data-panel="clients">?? API Clients</button></nav><div class="side-foot"><a href="/docs">Documentação da API</a><br><a href="/">Início</a></div></aside><main><header class="top"><h1 id="title">Fila de aprovação</h1><div class="row"><button class="btn small" id="theme" aria-label="Alternar tema">? Tema</button><span class="status"><i class="dot" id="dot"></i><span id="statusText">Conectando</span></span></div></header><section class="content">
 <section class="panel active" id="panel-tts"><div class="card"><h2>Fila de aprovação TTS</h2><p class="muted">Aprove ou rejeite os áudios produzidos pelo bot.</p><label><input type="checkbox" id="hideAdminTests" style="width:auto"> Ocultar testes administrativos</label><div class="table-wrap" id="ttsQueue"></div></div></section>
 <section class="panel" id="panel-tts-test"><div class="card"><h2>Terminal de teste TTS</h2><p class="muted">Testes ficam no histórico e não interferem no processamento.</p><div class="grid"><div><label>Provedor</label><select id="ttsTestProvider"><option>gtts</option><option>edge</option><option>openai</option><option>elevenlabs</option></select></div><div><label>Voz / idioma</label><input id="ttsTestVoice" value="pt"></div></div><label>Texto</label><textarea id="ttsTestText" maxlength="300" placeholder="Digite o texto para sintetizar..."></textarea><button class="btn primary" onclick="runTtsTest()">Gerar Áudio</button><pre id="ttsTestOutput"></pre><audio id="ttsTestAudio" controls style="display:none;width:100%"></audio></div></section>
+<section class="panel" id="panel-elevenlabs"><div class="card"><h2>ElevenLabs</h2><p class="muted">A configuração é salva no Postgres e passa a valer no próximo TTS, sem redeploy.</p><h3>Configuração</h3><div class="grid"><div><label>Voz</label><select id="elevenlabsVoice"></select></div><div><label>Modelo</label><select id="elevenlabsModel"></select></div><div><label>Formato</label><select id="elevenlabsFormat"></select></div></div><p class="muted">A compatibilidade de formato depende do modelo e do plano ElevenLabs. MP3 192 kbps exige Creator ou superior; PCM 44,1 kHz exige Pro ou superior. Se a API rejeitar o formato, o TTS usa gTTS como fallback.</p><div class="row"><button class="btn small" onclick="loadElevenLabsCatalog(null,true)">Recarregar listas</button><button class="btn small" onclick="saveElevenLabsSettings()">Salvar configuração</button></div><h3>Teste</h3><textarea id="elevenlabsTestText" maxlength="300" placeholder="Digite um texto para testar o ElevenLabs..."></textarea><button class="btn primary" onclick="runElevenLabsTest()">Testar</button><pre id="elevenlabsTestOutput"></pre><audio id="elevenlabsTestAudio" controls style="display:none;width:100%"></audio></div></section>
 <section class="panel" id="panel-personalidades"><div class="card"><h2>Personalidades</h2><input id="personalitySearch" placeholder="Buscar por handle, nome ou channel ID"><p class="muted" id="personalityCounts"></p><div class="table-wrap" id="personalities"></div><button class="btn small" onclick="personalityPage=Math.max(0,personalityPage-1);loadPersonalities()">Anterior</button> <button class="btn small" onclick="personalityPage++;loadPersonalities()">Próxima</button></div></section>
 <section class="panel" id="panel-cleanup"><div class="card"><h2>Limpeza de áudios</h2><p class="muted">Simule antes de remover arquivos antigos.</p><div class="grid" id="audioStats"></div><div class="row"><button class="btn" onclick="runCleanup(false)">Simular</button><button class="btn danger" onclick="runCleanup(true)">Executar limpeza</button></div><pre id="cleanupResult"></pre></div></section>
 <section class="panel" id="panel-terminal"><div class="card"><h2>Terminal SQL</h2><p class="muted">Somente consultas de leitura são aceitas.</p><textarea id="sqlInput" placeholder="SELECT * FROM tts_solicitacoes LIMIT 10"></textarea><button class="btn primary" onclick="runSQL()">Executar</button><pre id="sqlResult"></pre></div></section>
 <section class="panel" id="panel-clients"><div class="card"><h2>Clientes da API</h2><p class="muted">A chave completa aparece uma única vez. Guarde-a em local seguro.</p><div class="grid"><div><label>Nome do cliente</label><input id="clientName" placeholder="Meu aplicativo"></div><div><label>Escopos</label><div class="row"><label><input class="scope" type="checkbox" value="tts:generate" checked style="width:auto"> gerar</label><label><input class="scope" type="checkbox" value="tts:subscribe" style="width:auto"> eventos</label><label><input class="scope" type="checkbox" value="status:read" style="width:auto"> status</label></div></div></div><button class="btn primary" onclick="createClient()">Criar chave</button><pre id="newKey" hidden></pre><div class="table-wrap" id="clientsTable"></div></div></section>
 </section></main></div><div id="toast" role="status" aria-live="polite"></div><script>
 const ADMIN_TEST_USER_ID=__ADMIN_TEST_USER_ID__,TOKEN=new URLSearchParams(location.search).get('token')||'';let personalityPage=0,adminSocket;const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));function api(path,opt={}){let u='/admin/api'+path+(path.includes('?')?'&':'?')+'token='+encodeURIComponent(TOKEN);return fetch(u,{headers:{'Content-Type':'application/json'},...opt}).then(async r=>({status:r.status,...await r.json()})).catch(e=>({error:e.message}))}function toast(s){document.getElementById('toast').textContent=s;setTimeout(()=>document.getElementById('toast').textContent='',3200)}
-document.querySelectorAll('[data-panel]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-panel]').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.id==='panel-'+b.dataset.panel));document.getElementById('title').textContent=b.textContent.replace(/^\S+\s/,'');if(b.dataset.panel==='cleanup')loadAudioStats();if(b.dataset.panel==='personalidades')loadPersonalities();if(b.dataset.panel==='clients')loadClients()});document.getElementById('theme').onclick=()=>{let t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;localStorage.theme=t};document.documentElement.dataset.theme=localStorage.theme||'dark';
+document.querySelectorAll('[data-panel]').forEach(b=>b.onclick=()=>{document.querySelectorAll('[data-panel]').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.id==='panel-'+b.dataset.panel));document.getElementById('title').textContent=b.textContent.replace(/^\S+\s/,'');if(b.dataset.panel==='cleanup')loadAudioStats();if(b.dataset.panel==='personalidades')loadPersonalities();if(b.dataset.panel==='clients')loadClients();if(b.dataset.panel==='elevenlabs')loadElevenLabsSettings()});document.getElementById('theme').onclick=()=>{let t=document.documentElement.dataset.theme==='light'?'dark':'light';document.documentElement.dataset.theme=t;localStorage.theme=t};document.documentElement.dataset.theme=localStorage.theme||'dark';
 function loadPersonalities(){api('/user-personalities?search='+encodeURIComponent(document.getElementById('personalitySearch').value)+'&offset='+(personalityPage*50)).then(r=>{document.getElementById('personalityCounts').textContent=`Total: ${r.total||0} ? Página ${personalityPage+1}`;document.getElementById('personalities').innerHTML='<table><tr><th>Canal</th><th>Nome</th><th>Personalidade</th><th>Notas</th></tr>'+(r.items||[]).map(u=>`<tr><td>${esc(u.youtube_channel_id||'-')}</td><td>${esc(u.nome||u.youtube_id)}</td><td><select onchange="savePersonality('${esc(u.youtube_channel_id||'')}',this.value,this.parentElement.nextElementSibling.firstElementChild.value)"><option ${u.personalidade==='amigo'?'selected':''}>amigo</option><option ${!u.personalidade||u.personalidade==='neutro'?'selected':''}>neutro</option><option ${u.personalidade==='inimigo'?'selected':''}>inimigo</option><option ${u.personalidade==='evitar'?'selected':''}>evitar</option><option ${u.personalidade==='bloqueado'?'selected':''}>bloqueado</option></select></td><td><textarea rows="1">${esc(u.personalidade_notas||'')}</textarea></td></tr>`).join('')+'</table>'})}function savePersonality(c,p,n){if(!c)return toast('Canal sem ID');api('/user-personality',{method:'POST',body:JSON.stringify({channel_id:c,personalidade:p,notas:n})}).then(r=>toast(r.ok?'Salvo':'Erro'))}document.getElementById('personalitySearch').oninput=()=>{personalityPage=0;loadPersonalities()};
 function renderTTSQueue(items){if(document.getElementById('hideAdminTests').checked)items=items.filter(x=>Number(x.usuario_id)!==ADMIN_TEST_USER_ID);document.getElementById('ttsQueue').innerHTML=items.length?'<table><tr><th>ID</th><th>Usuário</th><th>Texto</th><th>Áudio</th><th>Status</th><th>Ação</th></tr>'+items.map(x=>`<tr><td>${x.id}</td><td>${esc(x.username||'-')}</td><td>${esc(x.texto_falado)}</td><td>${x.audio_url?`<audio controls src="${esc(x.audio_url)}"></audio>`:'-'}</td><td><span class="badge ${x.aprovado===null?'wait':x.aprovado?'ok':'bad'}">${x.aprovado===null?'pendente':x.aprovado?'aprovado':'rejeitado'}</span></td><td>${x.aprovado===null?`<button class="btn small" onclick="approveTTS(${x.id},true)">Aprovar</button> <button class="btn small danger" onclick="approveTTS(${x.id},false)">Rejeitar</button>`:'-'}</td></tr>`).join('')+'</table>':'<p class="muted">Nenhum Áudio na fila.</p>'}function approveTTS(id,v){api('/tts-queue/'+id,{method:'PUT',body:JSON.stringify({aprovado:v})}).then(()=>toast(v?'Aprovado':'Rejeitado'))}
-function connectAdminSocket(){let s=location.protocol==='https:'?'wss':'ws';adminSocket=new WebSocket(`${s}://${location.host}/admin/ws?token=${encodeURIComponent(TOKEN)}`);adminSocket.onopen=()=>{statusText.textContent='Conectado'};adminSocket.onmessage=e=>{let m=JSON.parse(e.data);if(m.type==='tts_queue')renderTTSQueue(m.items);if(m.type==='tts_test_progress')ttsTestOutput.textContent+=(ttsTestOutput.textContent?'\n':'')+m.message;if(m.type==='tts_test_result'&&m.audio_url){ttsTestAudio.src=m.audio_url;ttsTestAudio.style.display='block'}};adminSocket.onclose=()=>{statusText.textContent='Reconectando?';setTimeout(connectAdminSocket,1500)}}function runTtsTest(){let text=ttsTestText.value.trim();if(!text)return toast('Digite um texto');ttsTestOutput.textContent='Iniciando?';adminSocket.send(JSON.stringify({type:'tts_test',text,provider:ttsTestProvider.value,voice:ttsTestVoice.value}))}
+function loadElevenLabsSettings(){api('/elevenlabs-settings').then(r=>{if(r.error)return toast(r.error);elevenlabsFormat.innerHTML=(r.formats||[]).map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('');elevenlabsFormat.value=r.output_format;loadElevenLabsCatalog(r)})}function loadElevenLabsCatalog(current=null,force=false){let q=force?'?refresh=1':'';Promise.all([api('/elevenlabs-voices'+q),api('/elevenlabs-models'+q)]).then(([v,m])=>{if(v.items)elevenlabsVoice.innerHTML=v.items.map(x=>`<option value="${esc(x.id)}">${esc(x.name||x.id)}${x.category?' · '+esc(x.category):''}${x.language?' · '+esc(x.language):''}</option>`).join('');if(m.items)elevenlabsModel.innerHTML=m.items.map(x=>`<option value="${esc(x.id)}">${esc(x.name||x.id)}${x.description?' · '+esc(x.description):''}</option>`).join('');if(current){elevenlabsVoice.value=current.voice_id;elevenlabsModel.value=current.model_id}})}function saveElevenLabsSettings(){api('/elevenlabs-settings',{method:'PUT',body:JSON.stringify({voice_id:elevenlabsVoice.value,model_id:elevenlabsModel.value,output_format:elevenlabsFormat.value})}).then(r=>toast(r.ok?'Configuração salva':'Erro: '+(r.error||'não foi possível salvar')))}function runElevenLabsTest(){let text=elevenlabsTestText.value.trim();if(!text)return toast('Digite um texto');elevenlabsTestOutput.textContent='Iniciando…';adminSocket.send(JSON.stringify({type:'tts_test',text,provider:'elevenlabs',voice:elevenlabsVoice.value,model:elevenlabsModel.value,output_format:elevenlabsFormat.value,target:'elevenlabs'}))}
+document.getElementById('ttsTestProvider').onchange=()=>{};function connectAdminSocket(){let s=location.protocol==='https:'?'wss':'ws';adminSocket=new WebSocket(`${s}://${location.host}/admin/ws?token=${encodeURIComponent(TOKEN)}`);adminSocket.onopen=()=>{statusText.textContent='Conectado'};adminSocket.onmessage=e=>{let m=JSON.parse(e.data);if(m.type==='tts_queue')renderTTSQueue(m.items);if(m.type==='tts_test_progress'){ttsTestOutput.textContent+=(ttsTestOutput.textContent?'\n':'')+m.message;elevenlabsTestOutput.textContent+=(elevenlabsTestOutput.textContent?'\n':'')+m.message}if(m.type==='tts_test_result'&&m.audio_url){ttsTestAudio.src=m.audio_url;ttsTestAudio.style.display='block';elevenlabsTestAudio.src=m.audio_url;elevenlabsTestAudio.style.display='block'}};adminSocket.onclose=()=>{statusText.textContent='Reconectando?';setTimeout(connectAdminSocket,1500)}}function runTtsTest(){let text=ttsTestText.value.trim();if(!text)return toast('Digite um texto');ttsTestOutput.textContent='Iniciando?';adminSocket.send(JSON.stringify({type:'tts_test',text,provider:ttsTestProvider.value,voice:ttsTestVoice.value}))}
 function loadAudioStats(){api('/audio-stats').then(r=>audioStats.innerHTML=`<div class=stat><b>${r.total_files||0}</b>arquivos</div><div class=stat><b>${r.total_mb||0} MB</b>total</div><div class=stat><b>${r.oldest_file||'-'}</b>mais antigo</div>`)}function runCleanup(e){cleanupResult.textContent='Executando?';api('/cleanup',{method:'POST',body:JSON.stringify({execute:e})}).then(r=>{cleanupResult.textContent=JSON.stringify(r,null,2);loadAudioStats();toast('Concluído')})}function runSQL(){api('/terminal',{method:'POST',body:JSON.stringify({sql:sqlInput.value})}).then(r=>sqlResult.textContent=JSON.stringify(r,null,2))}
 function loadClients(){api('/api-clients').then(r=>clientsTable.innerHTML='<table><tr><th>Nome</th><th>Escopos</th><th>Criada</th><th>Status</th><th></th></tr>'+(r.items||[]).map(x=>`<tr><td>${esc(x.name)}</td><td>${esc((x.scopes||[]).join(', '))}</td><td>${esc(x.created_at)}</td><td><span class="badge ${x.revoked_at?'bad':'ok'}">${x.revoked_at?'revogada':'ativa'}</span></td><td>${x.revoked_at?'-':`<button class="btn small danger" onclick="revokeClient(${x.id})">Revogar</button>`}</td></tr>`).join('')+'</table>')}function createClient(){let scopes=[...document.querySelectorAll('.scope:checked')].map(x=>x.value);api('/api-clients',{method:'POST',body:JSON.stringify({name:clientName.value,scopes})}).then(r=>{if(r.key){newKey.hidden=false;newKey.textContent='Chave (copie agora): '+r.key;loadClients()}toast(r.key?'Chave criada':'Erro')})}function revokeClient(id){if(confirm('Revogar esta chave?'))api('/api-clients/'+id,{method:'DELETE'}).then(loadClients)}document.getElementById('hideAdminTests').onchange=e=>localStorage.hideAdmin=e.target.checked;hideAdminTests.checked=localStorage.hideAdmin==='true';api('/ping').then(r=>{dot.style.background=r.ok?'var(--ok)':'var(--danger)';statusText.textContent=r.ok?'Conectado':'Offline'});connectAdminSocket();
 </script></body></html>"""
@@ -64,6 +71,7 @@ class AdminPanel:
         self.on_tts_changed = on_tts_changed
         self.on_api_client_revoked = on_api_client_revoked
         self.admin_token = admin_token or os.getenv("ADMIN_TOKEN", "")
+        self._elevenlabs_catalog_cache: dict[str, tuple[float, list[dict]]] = {}
         if not self.admin_token:
             logger.warning("ADMIN_TOKEN not set — admin panel will be inaccessible!")
 
@@ -128,6 +136,93 @@ class AdminPanel:
         item = await models.create_api_client(self.db, name, key_prefix, key_hash, scopes)
         item["created_at"] = item["created_at"].isoformat()
         return web.json_response({"key": raw_key, "client": item}, status=201)
+
+    async def handle_elevenlabs_settings(self, request: web.Request) -> web.Response:
+        if not self._check_auth(request):
+            return self._auth_error()
+        if request.method not in {"GET", "PUT"}:
+            return web.json_response({"error": "Use GET ou PUT."}, status=405)
+        keys = ["elevenlabs_voice_id", "elevenlabs_model_id", "elevenlabs_output_format"]
+        if request.method == "GET":
+            values = await models.get_settings(self.db, keys)
+            return web.json_response({
+                "voice_id": values.get("elevenlabs_voice_id", self.settings.elevenlabs_voice_id),
+                "model_id": values.get("elevenlabs_model_id", self.settings.elevenlabs_model_id),
+                "output_format": values.get(
+                    "elevenlabs_output_format", self.settings.elevenlabs_output_format
+                ),
+                "formats": list(ELEVENLABS_FORMATS),
+            })
+        try:
+            data = await request.json()
+        except (ValueError, TypeError):
+            return web.json_response({"error": "JSON inválido"}, status=400)
+        values = {
+            "elevenlabs_voice_id": str(data.get("voice_id") or "").strip(),
+            "elevenlabs_model_id": str(data.get("model_id") or "").strip(),
+            "elevenlabs_output_format": str(data.get("output_format") or "").strip(),
+        }
+        if not values["elevenlabs_voice_id"] or not values["elevenlabs_model_id"]:
+            return web.json_response({"error": "Voz e modelo são obrigatórios."}, status=400)
+        if values["elevenlabs_output_format"] not in ELEVENLABS_FORMATS:
+            return web.json_response({"error": "Formato de áudio inválido."}, status=400)
+        await models.set_settings(self.db, values)
+        return web.json_response({"ok": True, **values})
+
+    async def _elevenlabs_catalog(self, endpoint: str, force: bool = False) -> web.Response:
+        cached = self._elevenlabs_catalog_cache.get(endpoint)
+        if cached and not force and time.monotonic() - cached[0] < 3600:
+            return web.json_response({"items": cached[1], "cached": True})
+        api_key = self.settings.elevenlabs_api_key.strip()
+        if not api_key:
+            return web.json_response({"error": "ELEVENLABS_API_KEY não configurada."}, status=503)
+        try:
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(
+                    f"https://api.elevenlabs.io/v1/{endpoint}",
+                    headers={"xi-api-key": api_key, "Accept": "application/json"},
+                ) as response:
+                    data = await response.json(content_type=None)
+                    if response.status >= 400:
+                        return web.json_response(
+                            {"error": "ElevenLabs recusou a consulta.", "details": data},
+                            status=502,
+                        )
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            logger.warning("Falha ao consultar catálogo ElevenLabs/%s: %s", endpoint, exc)
+            return web.json_response({"error": "Falha de rede ao consultar ElevenLabs."}, status=502)
+        if endpoint == "voices":
+            items = [
+                    {
+                        "id": item.get("voice_id"),
+                        "name": item.get("name"),
+                        "category": item.get("category"),
+                        "language": (item.get("labels") or {}).get("language"),
+                    }
+                    for item in data.get("voices", [])
+                ]
+        else:
+            items = [
+                {
+                    "id": item.get("model_id"),
+                    "name": item.get("name"),
+                    "description": item.get("description"),
+                }
+                for item in data if isinstance(item, dict)
+            ]
+        self._elevenlabs_catalog_cache[endpoint] = (time.monotonic(), items)
+        return web.json_response({"items": items, "cached": False})
+
+    async def handle_elevenlabs_voices(self, request: web.Request) -> web.Response:
+        if not self._check_auth(request):
+            return self._auth_error()
+        return await self._elevenlabs_catalog("voices", request.query.get("refresh") == "1")
+
+    async def handle_elevenlabs_models(self, request: web.Request) -> web.Response:
+        if not self._check_auth(request):
+            return self._auth_error()
+        return await self._elevenlabs_catalog("models", request.query.get("refresh") == "1")
 
     # ── API: TTS Queue ─────────────────────────────────────────────
 
@@ -341,6 +436,9 @@ class AdminPanel:
         app.router.add_get("/admin/api/api-clients", self.handle_api_clients)
         app.router.add_post("/admin/api/api-clients", self.handle_api_clients)
         app.router.add_delete("/admin/api/api-clients/{id}", self.handle_api_clients)
+        app.router.add_route("*", "/admin/api/elevenlabs-settings", self.handle_elevenlabs_settings)
+        app.router.add_get("/admin/api/elevenlabs-voices", self.handle_elevenlabs_voices)
+        app.router.add_get("/admin/api/elevenlabs-models", self.handle_elevenlabs_models)
         app.router.add_get("/admin/api/tts-queue", self.handle_tts_queue)
         app.router.add_put("/admin/api/tts-queue/{id}", self.handle_tts_approve)
         app.router.add_get("/admin/api/user-personalities", self.handle_user_personalities)
