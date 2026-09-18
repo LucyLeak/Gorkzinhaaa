@@ -68,6 +68,12 @@ CREATE TABLE IF NOT EXISTS configuracoes_cerebro (
     ultima_atualizacao TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS tts_solicitacoes (
     id BIGSERIAL PRIMARY KEY,
     usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
@@ -135,6 +141,11 @@ CREATE INDEX IF NOT EXISTS idx_api_clients_key_prefix ON api_clients(key_prefix)
     WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_tts_source
     ON tts_solicitacoes(source);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -202,6 +213,29 @@ async def ensure_admin_test_user(db: Database, user_id: int, username: str) -> N
         """,
         user_id, username,
     )
+
+
+async def get_settings(db: Database, keys: list[str]) -> dict[str, str]:
+    if not keys:
+        return {}
+    rows = await db.fetch("SELECT key, value FROM settings WHERE key = ANY($1::text[])", keys)
+    return {str(row["key"]): str(row["value"]) for row in rows}
+
+
+async def set_settings(db: Database, values: dict[str, str]) -> None:
+    if not values:
+        return
+    for key, value in values.items():
+        await db.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES ($1, $2, now())
+            ON CONFLICT (key) DO UPDATE
+            SET value = EXCLUDED.value, updated_at = now()
+            """,
+            key,
+            value,
+        )
 
 
 async def create_api_client(

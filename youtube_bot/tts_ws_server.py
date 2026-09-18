@@ -549,18 +549,30 @@ class TtsWebSocketServer:
 
         provider = str(payload.get("provider") or self.settings.tts_provider).strip().lower()
         voice = str(payload.get("voice") or self.settings.tts_voice).strip()
+        model = str(payload.get("model") or self.settings.elevenlabs_model_id).strip()
+        output_format = str(
+            payload.get("output_format") or self.settings.elevenlabs_output_format
+        ).strip()
         test_settings = replace(
             self.settings,
             tts_provider=provider,
             tts_voice=voice,
             elevenlabs_voice_id=str(payload.get("elevenlabs_voice_id") or self.settings.elevenlabs_voice_id),
             elevenlabs_model_id=str(payload.get("elevenlabs_model_id") or self.settings.elevenlabs_model_id),
-            elevenlabs_output_format=str(payload.get("elevenlabs_output_format") or self.settings.elevenlabs_output_format),
+            elevenlabs_output_format=output_format,
         )
         await self._send_json(ws, {"type": "tts_test_progress", "message": "Iniciando síntese..."})
         try:
             await self._send_json(ws, {"type": "tts_test_progress", "message": "Sintetizando..."})
-            audio_path = await generate_tts(text, test_settings, self.db, user_id=0, voice=voice)
+            audio_path = await generate_tts(
+                text,
+                test_settings,
+                self.db,
+                user_id=0,
+                voice=voice,
+                model=model,
+                load_runtime_settings=False,
+            )
             await self._send_json(ws, {"type": "tts_test_progress", "message": "Enviando áudio..."})
             audio_url = await upload_tts_audio(audio_path, test_settings)
             if not audio_url:
