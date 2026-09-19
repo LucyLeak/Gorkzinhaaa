@@ -108,6 +108,8 @@ YOUTUBE_LIVE_SCHEDULE_START=18:00
 YOUTUBE_LIVE_SCHEDULE_END=19:00
 YOUTUBE_LIVE_SCHEDULE_POLL_MINUTES=5
 YOUTUBE_LIVE_RESUME_GRACE_MINUTES=30
+YOUTUBE_LIVE_POLL_INTERVAL_SECONDS=15  # mínimo entre polls; valores abaixo de 10s consomem muita cota
+YOUTUBE_QUOTA_SAFETY_MARGIN=500         # preserva unidades para operações essenciais
 
 # ── Giphy ─────────────────────────────────────────
 GIPHY_API_KEY=...
