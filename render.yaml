@@ -57,6 +57,10 @@ services:
         sync: false
       - key: YOUTUBE_LIVE_CONNECT_MESSAGE
         sync: false
+      - key: YOUTUBE_LIVE_POLL_INTERVAL_SECONDS
+        sync: false
+      - key: YOUTUBE_QUOTA_SAFETY_MARGIN
+        sync: false
       - key: GIPHY_API_KEY
         sync: false
       - key: TTS_PROVIDER

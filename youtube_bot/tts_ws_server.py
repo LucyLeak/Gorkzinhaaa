@@ -17,6 +17,7 @@ from aiohttp import web
 from youtube_bot.db import models
 from youtube_bot.db.pool import Database
 from youtube_bot.admin_panel import AdminPanel
+from youtube_bot.youtube.quota import QuotaTracker
 from youtube_bot.api_docs import API_DOCS_HTML as PUBLIC_API_DOCS_HTML
 
 if TYPE_CHECKING:
@@ -71,12 +72,14 @@ class TtsWebSocketServer:
         port: int = 8765,
         poll_interval: float = 2.0,
         settings: Settings | None = None,
+        quota_tracker: QuotaTracker | None = None,
     ) -> None:
         self.db = db
         self.host = host
         self.port = port
         self.poll_interval = poll_interval
         self.settings = settings
+        self.quota_tracker = quota_tracker
         self._clients: set[web.WebSocketResponse] = set()
         self._admin_clients: set[web.WebSocketResponse] = set()
         self._app = web.Application()
@@ -123,6 +126,7 @@ class TtsWebSocketServer:
             settings=self.settings,
             on_tts_changed=self._broadcast_admin_queue,
             on_api_client_revoked=self._close_api_client_connections,
+            quota_tracker=self.quota_tracker,
         )
         self._admin.register_routes(self._app)
 

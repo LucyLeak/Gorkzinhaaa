@@ -15,6 +15,7 @@ from youtube_bot.youtube.client import (
     YouTubeQuotaExceededError,
 )
 from youtube_bot.youtube.live import LiveChatStopReason
+from youtube_bot.youtube.quota import QuotaGuardTriggered
 
 logger = logging.getLogger(__name__)
 
@@ -341,7 +342,7 @@ class ScheduledLiveMonitor:
     async def _discover_and_start_live_unlocked(self) -> bool:
         try:
             channel_id = await self._resolve_channel_id()
-        except YouTubeQuotaExceededError:
+        except (YouTubeQuotaExceededError, QuotaGuardTriggered):
             if self._manual_check:
                 raise
             logger.warning(
@@ -363,7 +364,7 @@ class ScheduledLiveMonitor:
 
         try:
             video_id = await self.youtube_client.find_active_live_video_id(channel_id)
-        except YouTubeQuotaExceededError:
+        except (YouTubeQuotaExceededError, QuotaGuardTriggered):
             if self._manual_check:
                 raise
             logger.warning(
@@ -386,6 +387,7 @@ class ScheduledLiveMonitor:
             return False
 
         self.detected_video_id = video_id
+        self.live_title = self.youtube_client.last_live_title
         self.detected_live_url = f"https://www.youtube.com/watch?v={video_id}"
         logger.info(
             "Live detectada automaticamente: %s. Usando o ID em memoria; "
@@ -395,7 +397,7 @@ class ScheduledLiveMonitor:
 
         try:
             self._active_task = await self.start_live_chat(video_id)
-        except YouTubeQuotaExceededError:
+        except (YouTubeQuotaExceededError, QuotaGuardTriggered):
             if self._manual_check:
                 raise
             logger.warning(

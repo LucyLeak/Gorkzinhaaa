@@ -12,7 +12,9 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from youtube_bot.config import Settings
+from youtube_bot.db.pool import Database
 from youtube_bot.utils.helpers import parse_youtube_datetime
+from youtube_bot.youtube.quota import QuotaGuardTriggered, QuotaTracker
 
 logger = logging.getLogger(__name__)
 
@@ -43,18 +45,35 @@ class YouTubeComment:
 
 
 class YouTubeClient:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, db: Database | None = None,
+                 quota_tracker: QuotaTracker | None = None) -> None:
         self.settings = settings
         self._service = None
+        self.quota_tracker = quota_tracker or (
+            QuotaTracker(db, settings.youtube_quota_safety_margin) if db else None
+        )
+        self._channel_cache: dict[str, str] = {}
+        self.last_live_title: str | None = None
 
     def reset_service(self) -> None:
         """Forca a recriacao do servico na proxima chamada (util apos erros SSL)."""
         self._service = None
 
-    async def _call_api(self, func, *args, max_ssl_retries: int = 2):
+    async def _call_api(self, func, *args, max_ssl_retries: int = 2,
+                        essential: bool = False):
         """Executa uma chamada a API em thread, com retry automatico em erros SSL."""
+        name = getattr(func, "__name__", "").lower()
+        operation = (
+            "channels" if "resolve_channel" in name else
+            next(
+                (key for key in ("search", "insert", "videos", "list") if key in name),
+                "list",
+            )
+        )
         for attempt in range(max_ssl_retries + 1):
             try:
+                if self.quota_tracker:
+                    await self.quota_tracker.reserve(operation, essential=essential)
                 return await asyncio.to_thread(func, *args)
             except HttpError as exc:
                 if _is_quota_exceeded(exc):
@@ -217,7 +236,9 @@ class YouTubeClient:
             raise RuntimeError("OAuth completo e necessario para postar respostas.")
 
         service = self._build_service()
-        payload = await self._call_api(self._insert_reply, service, comment_id, text)
+        payload = await self._call_api(
+            self._insert_reply, service, comment_id, text, essential=True
+        )
         return payload.get("id")
 
     def _insert_reply(self, service, comment_id: str, text: str):
@@ -236,6 +257,9 @@ class YouTubeClient:
         """Resolve um @handle do YouTube para o channel ID usando channels.list com forHandle."""
         service = self._build_service()
         clean_handle = handle.lstrip("@")
+        cache_key = clean_handle.casefold()
+        if cache_key in self._channel_cache:
+            return self._channel_cache[cache_key]
         payload = await self._call_api(
             self._resolve_channel_by_handle, service, clean_handle
         )
@@ -244,6 +268,7 @@ class YouTubeClient:
             logger.warning("Canal nao encontrado para o handle: @%s", clean_handle)
             return None
         channel_id = items[0]["id"]
+        self._channel_cache[cache_key] = channel_id
         logger.info("Handle @%s resolvido para channel ID: %s", clean_handle, channel_id)
         return channel_id
 
@@ -302,7 +327,9 @@ class YouTubeClient:
         )
         items = payload.get("items", [])
         if not items:
+            self.last_live_title = None
             return None
+        self.last_live_title = items[0].get("snippet", {}).get("title")
         return (items[0].get("id") or {}).get("videoId")
 
     def _search_one_active_live(self, service, channel_id: str):
@@ -316,7 +343,7 @@ class YouTubeClient:
                 eventType="live",
                 type="video",
                 maxResults=1,
-                fields="items(id/videoId)",
+                fields="items(id/videoId,snippet/title)",
             )
             .execute()
         )

@@ -41,6 +41,11 @@ from youtube_bot.youtube.client import (
 from youtube_bot.youtube.live import LiveChatClient, YouTubeLiveMessage
 from youtube_bot.youtube.live import LiveChatStopReason
 from youtube_bot.youtube.schedule import LiveDiscoverySchedule, ScheduledLiveMonitor
+from youtube_bot.youtube.quota import (
+    QuotaGuardTriggered,
+    QuotaTracker,
+    quota_exceeded_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +151,14 @@ async def main() -> None:
         giphy=giphy,
         consolidator=consolidator,
     )
-    youtube_client = YouTubeClient(settings)
+    quota_tracker = QuotaTracker(db, settings.youtube_quota_safety_margin)
+    youtube_client = YouTubeClient(settings, db=db, quota_tracker=quota_tracker)
     live_client = LiveChatClient(youtube_client)
+    logger.info(
+        "Live chat polling interval: %ss (YouTube recommends %ss).",
+        settings.youtube_live_poll_interval_seconds,
+        5,
+    )
 
     # Limpeza unica de dados antigos na inicializacao
     await cleanup_on_startup(db, settings.memory_retention_days)
@@ -159,6 +170,7 @@ async def main() -> None:
         port=settings.tts_ws_port,
         poll_interval=2.0,
         settings=settings,
+        quota_tracker=quota_tracker,
     )
     await tts_ws.start()
     tts_cleanup_task = asyncio.create_task(_tts_cleanup_loop(db, settings))
@@ -263,8 +275,8 @@ async def main() -> None:
                 return {"ok": True, "live_found": True, "already_connected": True}
             try:
                 found = await scheduled_monitor.force_check()
-            except YouTubeQuotaExceededError:
-                return {"ok": False, "error": "quota_exceeded"}
+            except (YouTubeQuotaExceededError, QuotaGuardTriggered):
+                return quota_exceeded_payload()
             if not found:
                 return {
                     "ok": True,
@@ -281,6 +293,9 @@ async def main() -> None:
             }
 
         async def disconnect_live() -> dict:
+            status = await quota_tracker.status()
+            if status["remaining"] <= 0:
+                return quota_exceeded_payload()
             disconnected = await scheduled_monitor.disconnect()
             return {
                 "ok": True,
@@ -337,7 +352,7 @@ async def main() -> None:
                         connect_message=settings.youtube_live_connect_message,
                         known_live_ids=known_live_ids,
                     )
-            except YouTubeQuotaExceededError:
+            except (YouTubeQuotaExceededError, QuotaGuardTriggered):
                 quota_pause_until = now + 3600  # Pause YouTube API for 1 hour
                 logger.warning(
                     "Quota do YouTube esgotada. Pausando chamadas a API por 1 hora "
@@ -354,7 +369,7 @@ async def main() -> None:
                         settings.youtube_bot_handle,
                         last_seen_by_video,
                     )
-                except YouTubeQuotaExceededError:
+                except (YouTubeQuotaExceededError, QuotaGuardTriggered):
                     quota_pause_until = now + 3600
                     logger.warning("Quota do YouTube esgotada nos comentarios. Pausando por 1 hora.")
 
@@ -388,7 +403,7 @@ async def connect_to_live_video(
     """Conecta diretamente a uma live conhecida por URL/video_id."""
     try:
         live_chat_id = await youtube_client.get_active_live_chat_id(video_id)
-    except YouTubeQuotaExceededError:
+    except (YouTubeQuotaExceededError, QuotaGuardTriggered):
         raise  # Propagate to main loop for global quota pause
     except Exception as exc:
         logger.warning("Ainda nao foi possivel conectar na live %s: %s", video_id, exc)
@@ -452,7 +467,7 @@ async def discover_and_connect_lives(
     """Busca lives ativas no canal e conecta nas que ainda nao foram vistas."""
     try:
         lives = await youtube_client.get_active_lives(channel_id)
-    except YouTubeQuotaExceededError:
+    except (YouTubeQuotaExceededError, QuotaGuardTriggered):
         raise  # Propagate to main loop for global quota pause
     except ssl.SSLError:
         logger.warning("Erro SSL ao buscar lives (conexao ja resetada internamente).")
@@ -503,14 +518,28 @@ async def poll_live_chat(
 ) -> LiveChatStopReason:
     """Loop de polling do chat ao vivo de uma live especifica."""
     logger.info("Conectado ao chat ao vivo: %s (video=%s)", live_chat_id, video_id)
+    try:
+        quota = await youtube_client.quota_tracker.status() if youtube_client.quota_tracker else None
+        if quota:
+            logger.info(
+                "Quota: %s/%s used (%s remaining) after connecting to live %s",
+                quota["used"], quota["limit"], quota["remaining"], video_id,
+            )
+    except Exception:
+        logger.debug("Nao foi possivel registrar a cota apos conectar na live.", exc_info=True)
 
     # Envia mensagem de "bot ativado" no chat (ignora DRY_RUN)
-    if connect_message:
+    if connect_message and connect_message.strip():
         try:
             await live_client.post_message(live_chat_id, connect_message, force=True)
             logger.info("Mensagem de conexao enviada no chat %s.", live_chat_id)
         except Exception:
             logger.exception("Falha ao enviar mensagem de conexao no chat %s.", live_chat_id)
+    else:
+        logger.info(
+            "Connect message disabled (YOUTUBE_LIVE_CONNECT_MESSAGE empty); "
+            "skipping post to save 50 quota units."
+        )
 
     page_token: str | None = None
     consecutive_errors = 0
@@ -545,9 +574,10 @@ async def poll_live_chat(
                     await process_live_message(live_client, director, msg, live_chat_id)
 
             # YouTube recomenda esperar o pollingIntervalMillis
-            await asyncio.sleep(poll_interval_ms / 1000.0)
+            configured = youtube_client.settings.youtube_live_poll_interval_seconds
+            await asyncio.sleep(max(poll_interval_ms / 1000.0, configured))
 
-        except YouTubeQuotaExceededError:
+        except (YouTubeQuotaExceededError, QuotaGuardTriggered):
             logger.warning(
                 "Cota da API do YouTube esgotada no chat %s. Pausando live chat.",
                 live_chat_id,
@@ -646,7 +676,7 @@ async def poll_video_comments(
     for video_id, last_seen in list(last_seen_by_video.items()):
         try:
             comments = await youtube_client.get_new_comments(video_id, last_seen)
-        except YouTubeQuotaExceededError:
+        except (YouTubeQuotaExceededError, QuotaGuardTriggered):
             raise  # Propagate to main loop for global quota pause
         except Exception:
             logger.exception("Falha ao buscar comentarios do video %s.", video_id)

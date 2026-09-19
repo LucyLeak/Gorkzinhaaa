@@ -111,6 +111,12 @@ CREATE INDEX IF NOT EXISTS idx_tts_criado_em
 
 CREATE INDEX IF NOT EXISTS idx_memorias_criado_em
     ON memorias_semanticas(criado_em);
+
+CREATE TABLE IF NOT EXISTS youtube_quota_usage (
+    usage_date DATE PRIMARY KEY,
+    units_used INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -155,6 +161,11 @@ WHERE status = 'concluido'
   AND broadcasted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_tts_broadcast_pending
     ON tts_solicitacoes(status, broadcasted_at, criado_em);
+CREATE TABLE IF NOT EXISTS youtube_quota_usage (
+    usage_date DATE PRIMARY KEY,
+    units_used INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 

@@ -41,6 +41,7 @@ class LiveChatClient:
             service,
             live_chat_id,
             page_token,
+            essential=True,
         )
         messages = []
         for item in payload.get("items", []):
@@ -80,7 +81,9 @@ class LiveChatClient:
             raise RuntimeError("OAuth completo e necessario para enviar mensagem na live.")
 
         service = self.youtube_client._build_service()
-        payload = await self.youtube_client._call_api(self._insert_message, service, live_chat_id, text)
+        payload = await self.youtube_client._call_api(
+            self._insert_message, service, live_chat_id, text, essential=True
+        )
         return payload.get("id")
 
     def _insert_message(self, service, live_chat_id: str, text: str):

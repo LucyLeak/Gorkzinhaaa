@@ -73,6 +73,8 @@ class Settings:
     memory_retention_days: int
     dry_run: bool
     poll_interval_seconds: int
+    youtube_live_poll_interval_seconds: int
+    youtube_quota_safety_margin: int
     max_repair_attempts: int
     coherence_threshold: float
     brain_surprise_chance: float
@@ -179,6 +181,14 @@ def load_settings() -> Settings:
         memory_retention_days=_int(os.getenv("MEMORY_RETENTION_DAYS"), 14),
         dry_run=_bool(os.getenv("DRY_RUN"), True),
         poll_interval_seconds=_int(os.getenv("POLL_INTERVAL_SECONDS"), 30),
+        youtube_live_poll_interval_seconds=_int(
+            os.getenv("YOUTUBE_LIVE_POLL_INTERVAL_SECONDS")
+            or os.getenv("YOUTUBE_CHAT_POLL_INTERVAL_SECONDS"),
+            15,
+        ),
+        youtube_quota_safety_margin=_int(
+            os.getenv("YOUTUBE_QUOTA_SAFETY_MARGIN"), 500
+        ),
         max_repair_attempts=_int(os.getenv("MAX_REPAIR_ATTEMPTS"), 3),
         coherence_threshold=_float(os.getenv("COHERENCE_THRESHOLD"), 0.60),
         brain_surprise_chance=_float(os.getenv("BRAIN_SURPRISE_CHANCE"), 0.20),
