@@ -4,7 +4,7 @@ from youtube_bot.brains.base import Brain, ChatClient
 
 
 class CerebroB(Brain):
-    def __init__(self, model: str, client: ChatClient | None = None) -> None:
+    def __init__(self, model: str, client: ChatClient | None = None, json_mode: bool = True) -> None:
         super().__init__(
             name="cerebro_b",
             prompt_base=(
@@ -14,4 +14,5 @@ class CerebroB(Brain):
             default_temperature=0.9,
             model=model,
             client=client,
+            json_mode=json_mode,
         )

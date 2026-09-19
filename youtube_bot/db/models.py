@@ -85,7 +85,8 @@ CREATE TABLE IF NOT EXISTS tts_solicitacoes (
     erro TEXT,
     criado_em TIMESTAMPTZ NOT NULL DEFAULT now(),
     concluido_em TIMESTAMPTZ,
-    source TEXT NOT NULL DEFAULT 'admin'
+    source TEXT NOT NULL DEFAULT 'admin',
+    broadcasted_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS api_clients (
@@ -146,6 +147,14 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE tts_solicitacoes
+    ADD COLUMN IF NOT EXISTS broadcasted_at TIMESTAMPTZ;
+UPDATE tts_solicitacoes
+SET broadcasted_at = COALESCE(concluido_em, criado_em, now())
+WHERE status = 'concluido'
+  AND broadcasted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_tts_broadcast_pending
+    ON tts_solicitacoes(status, broadcasted_at, criado_em);
 """
 
 
@@ -495,10 +504,10 @@ async def get_pending_tts(db: Database, limit: int = 10) -> list[dict[str, objec
     """Retorna TTS concluidos que ainda nao foram reproduzidos."""
     rows = await db.fetch(
         """
-        SELECT t.id, t.texto_falado, t.audio_url, t.criado_em, u.nome AS autor
+        SELECT t.id, t.texto_falado, t.audio_url, t.criado_em, t.broadcasted_at, u.nome AS autor
         FROM tts_solicitacoes t
         JOIN usuarios u ON u.id = t.usuario_id
-        WHERE t.status = 'concluido'
+        WHERE t.status = 'concluido' AND t.broadcasted_at IS NULL
         ORDER BY t.criado_em ASC
         LIMIT $1
         """,
@@ -510,9 +519,56 @@ async def get_pending_tts(db: Database, limit: int = 10) -> list[dict[str, objec
 async def mark_tts_reproduzido(db: Database, tts_id: int) -> None:
     """Marca um TTS como reproduzido."""
     await db.execute(
-        "UPDATE tts_solicitacoes SET status = 'reproduzido' WHERE id = $1",
+        "UPDATE tts_solicitacoes SET status = 'reproduzido', broadcasted_at = COALESCE(broadcasted_at, now()) WHERE id = $1",
         tts_id,
     )
+
+
+async def claim_tts_broadcast(db: Database, tts_id: int) -> bool:
+    result = await db.execute(
+        """
+        UPDATE tts_solicitacoes
+        SET broadcasted_at = now()
+        WHERE id = $1 AND broadcasted_at IS NULL
+        """,
+        tts_id,
+    )
+    return result.endswith("1")
+
+
+async def release_tts_broadcast_claim(db: Database, tts_id: int) -> None:
+    await db.execute(
+        """
+        UPDATE tts_solicitacoes
+        SET broadcasted_at = NULL
+        WHERE id = $1 AND status = 'concluido'
+        """,
+        tts_id,
+    )
+
+
+async def cleanup_old_tts(
+    db: Database, retention_hours: int, api_retention_hours: int
+) -> dict[str, int]:
+    deleted = await db.fetchval(
+        """
+        WITH removed AS (
+            DELETE FROM tts_solicitacoes
+            WHERE status IN ('concluido', 'erro')
+              AND criado_em < now() - make_interval(
+                    hours => CASE WHEN source = 'api' THEN $2 ELSE $1 END
+                  )
+            RETURNING id
+        )
+        SELECT count(*) FROM removed
+        """,
+        retention_hours,
+        api_retention_hours,
+    )
+    kept = await db.fetchval(
+        "SELECT count(*) FROM tts_solicitacoes WHERE status IN ('concluido', 'erro')"
+    )
+    return {"deleted": int(deleted or 0), "kept": int(kept or 0)}
 
 
 async def cleanup_old_data(db: Database, retention_days: int) -> dict[str, int]:

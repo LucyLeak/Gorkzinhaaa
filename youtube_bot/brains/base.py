@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Protocol
 
 from youtube_bot.utils.helpers import MAX_CHAT_MESSAGE_CHARS, prepare_chat_message
+
+JSON_RESPONSE_CONTRACT = (
+    "Responda SOMENTE com um objeto JSON valido, sem markdown ou texto fora do JSON, "
+    'no formato {"thought":"<raciocinio interno, nunca enviado ao chat>",'
+    '"message":"<mensagem final enviada ao chat>"}. '
+    "O campo message deve conter apenas a resposta publica e ter no maximo "
+    f"{MAX_CHAT_MESSAGE_CHARS} caracteres."
+)
 
 
 class ChatClient(Protocol):
@@ -17,6 +26,7 @@ class Brain:
     default_temperature: float
     model: str
     client: ChatClient | None = None
+    json_mode: bool = True
 
     async def generate(
         self,
@@ -32,11 +42,7 @@ class Brain:
             {"role": "system", "content": self.prompt_base},
             {
                 "role": "system",
-                "content": (
-                    "A resposta publica enviada ao chat deve ter no maximo "
-                    f"{MAX_CHAT_MESSAGE_CHARS} caracteres. Se usar <think>...</think>, "
-                    "esse bloco sera removido antes de enviar; deixe a resposta final fora dele."
-                ),
+                "content": JSON_RESPONSE_CONTRACT,
             },
             {
                 "role": "system",
@@ -53,6 +59,11 @@ class Brain:
             messages=messages,
             temperature=temperature if temperature is not None else self.default_temperature,
             max_tokens=220,
+            **(
+                {"response_format": {"type": "json_object"}}
+                if getattr(self, "json_mode", True)
+                else {}
+            ),
         )
         content = response.choices[0].message.content or ""
         return content.strip()
@@ -79,4 +90,10 @@ class Brain:
             answer = f"Modo teste: humor leve para: {user_message}{suffix}"
         else:
             answer = f"Modo teste: resposta objetiva para: {user_message}{suffix}"
-        return prepare_chat_message(answer)[1]
+        return json.dumps(
+            {
+                "thought": "Resposta simulada no modo DRY_RUN.",
+                "message": answer,
+            },
+            ensure_ascii=False,
+        )

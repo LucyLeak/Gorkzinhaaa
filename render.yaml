@@ -9,6 +9,8 @@ services:
         sync: false
       - key: OPENAI_BASE_URL
         sync: false
+      - key: OPENAI_JSON_MODE
+        sync: false
       - key: OPENAI_CHAT_MODEL
         sync: false
       - key: OPENAI_EMBEDDING_MODEL
@@ -102,6 +104,10 @@ services:
       - key: API_TTS_WAIT_TIMEOUT_SECONDS
         sync: false
       - key: API_TTS_MAX_CONCURRENT
+        sync: false
+      - key: TTS_RETENTION_HOURS
+        sync: false
+      - key: TTS_API_RETENTION_HOURS
         sync: false
       - key: MEMORY_RETENTION_DAYS
         sync: false

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from youtube_bot.brains.base import Brain
 from youtube_bot.memory.vector_store import VectorMemoryStore
-from youtube_bot.utils.helpers import MAX_CHAT_MESSAGE_CHARS, parse_thinking_response
+from youtube_bot.utils.helpers import MAX_CHAT_MESSAGE_CHARS, prepare_chat_message
 from youtube_bot.validation.metrics import cosine_similarity
 
 
@@ -55,8 +55,7 @@ class Validator:
 
     async def validate(self, question: str, answer: str, brain_name: str) -> list[str]:
         reasons: list[str] = []
-        _, public_answer = parse_thinking_response(answer)
-        public_answer = public_answer.strip()
+        _, public_answer = prepare_chat_message(answer, allow_plain_text=False)
         lower = public_answer.lower()
 
         if any(word and word in lower for word in self.forbidden_words):

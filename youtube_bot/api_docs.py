@@ -84,7 +84,7 @@ async with aiohttp.ClientSession() as session:
 <tr><td><code>tts:generate</code></td><td>Criar e consultar TTS</td></tr>
 <tr><td><code>tts:subscribe</code></td><td>Eventos do WebSocket público</td></tr>
 <tr><td><code>status:read</code></td><td>Status e consulta de TTS</td></tr></table>
-<p class="muted">O limite de esperas síncronas é configurado por <code>API_TTS_MAX_CONCURRENT</code>. O timeout padrão é 15 segundos. CORS usa <code>API_ALLOWED_ORIGINS</code>. REST: 10 POST TTS/min, 60 consultas TTS/min e 30 consultas de status/min por chave; respostas 429 incluem <code>Retry-After</code>.</p>
+<p class="muted">O limite de esperas síncronas é configurado por <code>API_TTS_MAX_CONCURRENT</code>. O timeout padrão é 15 segundos. Registros TTS da API são retidos por <code>TTS_API_RETENTION_HOURS</code> horas; depois disso, a consulta pode retornar 404. CORS usa <code>API_ALLOWED_ORIGINS</code>. REST: 10 POST TTS/min, 60 consultas TTS/min e 30 consultas de status/min por chave; respostas 429 incluem <code>Retry-After</code>.</p>
 </section>
 
 <section>

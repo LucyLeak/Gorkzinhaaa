@@ -4,6 +4,7 @@ import asyncio
 import logging
 import random
 import ssl
+import time
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -12,6 +13,7 @@ from youtube_bot.brains.cerebro_a import CerebroA
 from youtube_bot.brains.cerebro_b import CerebroB
 from youtube_bot.brains.diretor import Director
 from youtube_bot.config import load_settings
+from youtube_bot.db import models
 from youtube_bot.db.models import ensure_admin_test_user, initialize_schema
 from youtube_bot.db.pool import Database
 from youtube_bot.fun.giphy import GiphyClient
@@ -24,6 +26,7 @@ from youtube_bot.utils.helpers import (
     extract_youtube_video_id,
     utc_now,
     prepare_chat_message,
+    sanitize_for_chat,
 )
 from youtube_bot.utils.logger import configure_logging
 from youtube_bot.validation.validator import Validator
@@ -41,6 +44,25 @@ logger = logging.getLogger(__name__)
 
 # Intervalo para verificar novas lives no canal (em segundos)
 LIVE_DISCOVERY_INTERVAL = 60
+TTS_CLEANUP_INTERVAL_SECONDS = 600
+
+
+async def _tts_cleanup_loop(db: Database, settings) -> None:
+    while True:
+        await asyncio.sleep(TTS_CLEANUP_INTERVAL_SECONDS)
+        started = time.monotonic()
+        try:
+            result = await models.cleanup_old_tts(
+                db,
+                settings.tts_retention_hours,
+                settings.tts_api_retention_hours,
+            )
+            result["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+            logger.info("TTS cleanup: %s", result)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("TTS cleanup failed; continuing next cycle.", exc_info=True)
 
 
 def _normalize_youtube_handle(value: str) -> str:
@@ -97,8 +119,12 @@ async def main() -> None:
         vector_store=vector_store,
     )
 
-    brain_a = CerebroA(settings.openai_chat_model, openai_client)
-    brain_b = CerebroB(settings.openai_chat_model, openai_client)
+    brain_a = CerebroA(
+        settings.openai_chat_model, openai_client, settings.openai_json_mode
+    )
+    brain_b = CerebroB(
+        settings.openai_chat_model, openai_client, settings.openai_json_mode
+    )
     trivia = TriviaGame(Path("data/trivia_questions.json"))
     giphy = GiphyClient(settings.giphy_api_key)
     consolidator = MemoryConsolidator(
@@ -133,6 +159,7 @@ async def main() -> None:
         settings=settings,
     )
     await tts_ws.start()
+    tts_cleanup_task = asyncio.create_task(_tts_cleanup_loop(db, settings))
 
     # ── Resolver channel ID a partir do @handle ──────────────────────
     live_video_id: str | None = None
@@ -199,6 +226,8 @@ async def main() -> None:
                 await asyncio.sleep(3600)
         except (KeyboardInterrupt, asyncio.CancelledError):
             pass
+        tts_cleanup_task.cancel()
+        await asyncio.gather(tts_cleanup_task, return_exceptions=True)
         return
 
     scheduled_monitor_task: asyncio.Task[None] | None = None
@@ -287,6 +316,8 @@ async def main() -> None:
         if scheduled_monitor_task is not None:
             scheduled_monitor_task.cancel()
             await asyncio.gather(scheduled_monitor_task, return_exceptions=True)
+        tts_cleanup_task.cancel()
+        await asyncio.gather(tts_cleanup_task, return_exceptions=True)
         await tts_ws.stop()
         await db.close()
 
@@ -514,10 +545,21 @@ async def process_live_message(
             message_type="live",
             author_channel_id=message.author_channel_id or None,
         )
-        thought, message_text = prepare_chat_message(reply.text)
+        logger.info("Raw AI reply: %r", reply.text)
+        thought, message_text = prepare_chat_message(
+            reply.text,
+            allow_plain_text=reply.brain_name not in {"cerebro_a", "cerebro_b"},
+        )
         if thought:
             logger.info("Pensamento do bot: %s", thought)
 
+        message_text = sanitize_for_chat(message_text)
+        if thought and thought.strip() and thought.casefold() in message_text.casefold():
+            logger.error("Pensamento da IA vazou para a mensagem; postagem bloqueada.")
+            return
+        if reply.text.lstrip().startswith("{") and "thought" in reply.text.casefold() and not message_text:
+            logger.error("Resposta JSON contem thought, mas message esta vazia; postagem bloqueada.")
+            return
         if not message_text:
             logger.warning(
                 "A resposta do bot ficou vazia apos remover o pensamento. Nao sera enviada."
@@ -606,10 +648,20 @@ async def process_comment(
             message_type="comment",
             author_channel_id=comment.author_channel_id or None,
         )
-        thought, message_text = prepare_chat_message(reply.text)
+        thought, message_text = prepare_chat_message(
+            reply.text,
+            allow_plain_text=reply.brain_name not in {"cerebro_a", "cerebro_b"},
+        )
         if thought:
             logger.info("Pensamento do bot: %s", thought)
 
+        message_text = sanitize_for_chat(message_text)
+        if thought and thought.strip() and thought.casefold() in message_text.casefold():
+            logger.error("Pensamento da IA vazou para o comentario; postagem bloqueada.")
+            return
+        if reply.text.lstrip().startswith("{") and "thought" in reply.text.casefold() and not message_text:
+            logger.error("Resposta JSON contem thought, mas message esta vazia; postagem bloqueada.")
+            return
         if not message_text:
             logger.warning(
                 "A resposta do bot ficou vazia apos remover o pensamento. Nao sera enviada."
