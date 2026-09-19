@@ -9,7 +9,7 @@ import secrets
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import aiohttp
 from aiohttp import web
@@ -125,6 +125,14 @@ class TtsWebSocketServer:
             on_api_client_revoked=self._close_api_client_connections,
         )
         self._admin.register_routes(self._app)
+
+    def set_live_controls(
+        self,
+        force_check: Callable[[], Awaitable[dict]],
+        disconnect: Callable[[], Awaitable[dict]],
+        status: Callable[[], dict],
+    ) -> None:
+        self._admin.set_live_controls(force_check, disconnect, status)
 
     async def start(self) -> None:
         """Start the HTTP server and the DB poller background task."""

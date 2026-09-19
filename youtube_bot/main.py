@@ -5,6 +5,8 @@ import logging
 import random
 import ssl
 import time
+from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -163,10 +165,8 @@ async def main() -> None:
 
     # ── Resolver channel ID a partir do @handle ──────────────────────
     live_video_id: str | None = None
-    scheduled_channel_mode = bool(
-        settings.youtube_live_schedule_enabled
-        and (settings.youtube_channel_id or settings.youtube_channel_handle)
-    )
+    channel_mode = bool(settings.youtube_channel_id or settings.youtube_channel_handle)
+    scheduled_channel_mode = bool(settings.youtube_live_schedule_enabled and channel_mode)
 
     live_url = settings.youtube_live_url.strip()
     if live_url:
@@ -232,7 +232,7 @@ async def main() -> None:
 
     scheduled_monitor_task: asyncio.Task[None] | None = None
     scheduled_monitor: ScheduledLiveMonitor | None = None
-    if scheduled_channel_mode:
+    if channel_mode:
         scheduled_monitor = ScheduledLiveMonitor(
             youtube_client=youtube_client,
             schedule=LiveDiscoverySchedule.from_settings(settings),
@@ -244,12 +244,63 @@ async def main() -> None:
                 bot_channel_id=settings.youtube_bot_channel_id,
                 bot_handle=settings.youtube_bot_handle,
                 connect_message=settings.youtube_live_connect_message,
+                message_counter=lambda: setattr(
+                    scheduled_monitor,
+                    "message_count",
+                    scheduled_monitor.message_count + 1,
+                ),
             ),
             channel_id=settings.youtube_channel_id,
             channel_handle=settings.youtube_channel_handle,
         )
-        scheduled_monitor_task = asyncio.create_task(scheduled_monitor.run())
-        logger.info("Modo de agenda de lives ativado.")
+        if scheduled_channel_mode:
+            scheduled_monitor_task = asyncio.create_task(scheduled_monitor.run())
+            logger.info("Modo de agenda de lives ativado.")
+
+        async def force_live_check() -> dict:
+            logger.info("[MANUAL] Force live check requested by admin")
+            if scheduled_monitor._active_task is not None and not scheduled_monitor._active_task.done():
+                return {"ok": True, "live_found": True, "already_connected": True}
+            try:
+                found = await scheduled_monitor.force_check()
+            except YouTubeQuotaExceededError:
+                return {"ok": False, "error": "quota_exceeded"}
+            if not found:
+                return {
+                    "ok": True,
+                    "live_found": False,
+                    "message": f"Nenhuma live ativa encontrada no canal {settings.youtube_channel_handle or settings.youtube_channel_id}.",
+                }
+            return {
+                "ok": True,
+                "live_found": True,
+                "already_connected": False,
+                "video_id": scheduled_monitor.detected_video_id,
+                "live_chat_id": scheduled_monitor.live_chat_id,
+                "title": scheduled_monitor.live_title or scheduled_monitor.detected_video_id,
+            }
+
+        async def disconnect_live() -> dict:
+            disconnected = await scheduled_monitor.disconnect()
+            return {
+                "ok": True,
+                "disconnected": disconnected,
+                **({} if disconnected else {"message": "Nenhuma live conectada."}),
+            }
+
+        def live_status() -> dict:
+            return scheduled_monitor.status()
+
+        tts_ws.set_live_controls(force_live_check, disconnect_live, live_status)
+
+        if scheduled_channel_mode and settings.youtube_live_recovery_grace_minutes > 0:
+            now_local = scheduled_monitor._now()
+            window_end = scheduled_monitor.schedule.window_end(now_local)
+            if (
+                window_end <= now_local
+                <= window_end + timedelta(minutes=settings.youtube_live_recovery_grace_minutes)
+            ):
+                asyncio.create_task(force_live_check())
 
     quota_pause_until: float = 0  # timestamp until which to skip YouTube API calls
 
@@ -368,9 +419,10 @@ async def start_scheduled_live_chat(
     bot_channel_id: str,
     bot_handle: str,
     connect_message: str,
+    message_counter: Callable[[], None] | None = None,
 ) -> asyncio.Task[LiveChatStopReason]:
     live_chat_id = await youtube_client.get_active_live_chat_id(video_id)
-    return asyncio.create_task(
+    task = asyncio.create_task(
         poll_live_chat(
             youtube_client=youtube_client,
             live_client=live_client,
@@ -380,8 +432,11 @@ async def start_scheduled_live_chat(
             bot_channel_id=bot_channel_id,
             bot_handle=bot_handle,
             connect_message=connect_message,
+            message_counter=message_counter,
         )
     )
+    task.live_chat_id = live_chat_id
+    return task
 
 
 async def discover_and_connect_lives(
@@ -444,6 +499,7 @@ async def poll_live_chat(
     bot_channel_id: str,
     bot_handle: str,
     connect_message: str,
+    message_counter: Callable[[], None] | None = None,
 ) -> LiveChatStopReason:
     """Loop de polling do chat ao vivo de uma live especifica."""
     logger.info("Conectado ao chat ao vivo: %s (video=%s)", live_chat_id, video_id)
@@ -477,6 +533,8 @@ async def poll_live_chat(
                 )
             else:
                 for msg in messages:
+                    if message_counter is not None:
+                        message_counter()
                     if _is_bot_author(
                         msg.author_channel_id,
                         msg.author_name,
