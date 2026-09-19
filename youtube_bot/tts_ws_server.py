@@ -94,7 +94,6 @@ class TtsWebSocketServer:
         self._api_clients: dict[web.WebSocketResponse, dict] = {}
         self._api_tasks: set[asyncio.Task] = set()
         self._api_connection_counts: dict[int, int] = {}
-        self._api_broadcasted: set[int] = set()
         self._api_rate_limits: dict[tuple[int, str], list[float]] = {}
         self._api_rate_limit_prune_at = 0.0
 
@@ -610,12 +609,19 @@ class TtsWebSocketServer:
 
         rows = await models.get_pending_tts(self.db, limit=10)
         for row in rows:
-            await self._broadcast_tts(
-                tts_id=row["id"],
-                username=str(row.get("autor") or ""),
-                message=str(row.get("texto_falado") or ""),
-                audio_url=str(row.get("audio_url") or ""),
-            )
+            tts_id = int(row["id"])
+            if not await models.claim_tts_broadcast(self.db, tts_id):
+                continue
+            try:
+                await self._broadcast_tts(
+                    tts_id=tts_id,
+                    username=str(row.get("autor") or ""),
+                    message=str(row.get("texto_falado") or ""),
+                    audio_url=str(row.get("audio_url") or ""),
+                )
+            except Exception:
+                await models.release_tts_broadcast_claim(self.db, tts_id)
+                raise
 
     # ── HTTP queue endpoint ─────────────────────────────────────────
 
@@ -644,15 +650,13 @@ class TtsWebSocketServer:
         api_payload = {"type": "tts", "id": tts_id, "username": username,
                        "message": message, "audio": audio_url,
                        "created_at": _isoformat_or_none(row.get("criado_em")) if row else None}
-        if tts_id not in self._api_broadcasted:
-            for api_ws in list(self._api_clients):
-                try:
-                    await api_ws.send_json(api_payload)
-                except (ConnectionError, asyncio.TimeoutError):
-                    self._api_clients.pop(api_ws, None)
-            self._api_broadcasted.add(tts_id)
-        if not self._clients:
-            return
+        delivered_any = False
+        for api_ws in list(self._api_clients):
+            try:
+                await api_ws.send_json(api_payload)
+                delivered_any = True
+            except (ConnectionError, asyncio.TimeoutError):
+                self._api_clients.pop(api_ws, None)
         payload = json.dumps({
             "id": tts_id,
             "username": username,
@@ -661,17 +665,20 @@ class TtsWebSocketServer:
             "audio": audio_url,
         })
         dead: list[web.WebSocketResponse] = []
-        delivered = 0
+        delivered_clients = 0
         for ws in list(self._clients):
             try:
                 await ws.send_str(payload)
-                delivered += 1
+                delivered_clients += 1
             except (ConnectionError, asyncio.TimeoutError):
                 dead.append(ws)
         for ws in dead:
             self._clients.discard(ws)
-        if delivered > 0:
+        if delivered_clients > 0:
             await models.mark_tts_reproduzido(self.db, tts_id)
-            logger.info("📢 TTS #%d broadcasted to %d client(s): \"%s...\"", tts_id, delivered, message[:60])
+            logger.info("📢 TTS #%d broadcasted to %d client(s): \"%s...\"", tts_id, delivered_clients, message[:60])
+        elif delivered_any:
+            logger.info("📢 TTS #%d broadcasted to API client(s): \"%s...\"", tts_id, message[:60])
         else:
+            await models.release_tts_broadcast_claim(self.db, tts_id)
             logger.warning("⚠️ TTS #%d nao entregue a nenhum cliente (todos offline).", tts_id)

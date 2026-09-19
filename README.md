@@ -343,16 +343,16 @@ Se o usuário tentar antes do tempo:
 
 ## Limpeza Automática de Dados
 
-Na inicialização do bot, uma limpeza **única** é executada para remover registros antigos:
+Na inicialização do bot, a limpeza de dados é executada e a limpeza de TTS continua em uma tarefa periódica a cada 10 minutos:
 
 | Tabela | O que é removido |
 |---|---|
 | `mensagens` | Todas com mais de `MEMORY_RETENTION_DAYS` |
 | `respostas_geradas` | Todas com mais de `MEMORY_RETENTION_DAYS` |
-| `tts_solicitacoes` | Apenas concluídas ou com erro (preserva pendentes/processando) |
+| `tts_solicitacoes` | Concluídas/erro após `TTS_RETENTION_HOURS` (preserva pendentes/processando); origem `api` usa `TTS_API_RETENTION_HOURS` |
 | `memorias_semanticas` | Apenas do tipo `episodio` (preserva `fato` e `contexto`) |
 
-A limpeza roda **uma vez por inicialização** — só executa novamente quando o bot for reiniciado. O padrão é 14 dias (`MEMORY_RETENTION_DAYS=14`).
+A limpeza de memória roda uma vez por inicialização, usando `MEMORY_RETENTION_DAYS=14`. A limpeza de TTS roda a cada 10 minutos, com padrão de 6 horas para `admin`/`live` e 48 horas para `api`.
 
 ---
 

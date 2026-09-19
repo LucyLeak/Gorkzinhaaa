@@ -34,6 +34,7 @@ def _int(value: str | None, default: int) -> int:
 class Settings:
     openai_api_key: str
     openai_base_url: str
+    openai_json_mode: bool
     openai_chat_model: str
     openai_embedding_model: str
     openai_embedding_dimensions: int | None
@@ -81,6 +82,8 @@ class Settings:
     api_allowed_origins: tuple[str, ...]
     api_tts_wait_timeout_seconds: int
     api_tts_max_concurrent: int
+    tts_retention_hours: int
+    tts_api_retention_hours: int
 
     @property
     def has_youtube_oauth(self) -> bool:
@@ -105,6 +108,7 @@ def load_settings() -> Settings:
         openai_base_url=_normalize_openai_base_url(
             os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE") or ""
         ),
+        openai_json_mode=_bool(os.getenv("OPENAI_JSON_MODE"), False),
         openai_chat_model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
         openai_embedding_model=os.getenv(
             "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
@@ -181,6 +185,8 @@ def load_settings() -> Settings:
         api_allowed_origins=_split_csv(os.getenv("API_ALLOWED_ORIGINS")),
         api_tts_wait_timeout_seconds=_int(os.getenv("API_TTS_WAIT_TIMEOUT_SECONDS"), 15),
         api_tts_max_concurrent=_int(os.getenv("API_TTS_MAX_CONCURRENT"), 5),
+        tts_retention_hours=_int(os.getenv("TTS_RETENTION_HOURS"), 6),
+        tts_api_retention_hours=_int(os.getenv("TTS_API_RETENTION_HOURS"), 48),
     )
 
 
