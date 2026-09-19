@@ -214,6 +214,12 @@ class ScheduledLiveMonitor:
         self._standby_until: datetime | None = None
         self._finished_on: date | None = None
         self._standby_cutoff = time(21, 0)
+        self.connected_at: datetime | None = None
+        self.message_count = 0
+        self.live_chat_id: str | None = None
+        self.live_title: str | None = None
+        self._manual_check = False
+        self._discovery_lock = asyncio.Lock()
 
     async def run(self) -> None:
         logger.info(
@@ -237,6 +243,13 @@ class ScheduledLiveMonitor:
                     continue
 
                 if self._is_finished_today(now) or not self.schedule.is_discovery_window(now):
+                    logger.info(
+                        "Fora da janela de descoberta (%s-%s %s). Próxima checagem agendada: %s.",
+                        self.schedule.start_time.strftime("%H:%M"),
+                        self.schedule.end_time.strftime("%H:%M"),
+                        self.schedule.zone.key,
+                        self.schedule.next_window_start(now).strftime("%Y-%m-%d %H:%M"),
+                    )
                     await self._sleep_until(self.schedule.next_window_start(now))
                     continue
 
@@ -255,6 +268,44 @@ class ScheduledLiveMonitor:
             return
         self._active_task.cancel()
         await asyncio.gather(self._active_task, return_exceptions=True)
+
+    async def force_check(self) -> bool:
+        """Executa uma descoberta única sem aplicar a janela da agenda."""
+        if self._active_task is not None and not self._active_task.done():
+            return True
+        self._manual_check = True
+        try:
+            return await self._discover_and_start_live()
+        finally:
+            self._manual_check = False
+
+    async def disconnect(self) -> bool:
+        task = self._active_task
+        if task is None or task.done():
+            return False
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        self._active_task = None
+        self.connected_at = None
+        self.live_chat_id = None
+        return True
+
+    def status(self) -> dict[str, object]:
+        connected = self._active_task is not None and not self._active_task.done()
+        now = self._now()
+        return {
+            "connected": connected,
+            "video_id": self.detected_video_id if connected else None,
+            "title": self.live_title if connected else None,
+            "live_chat_id": self.live_chat_id if connected else None,
+            "connected_since": self.connected_at.isoformat() if connected and self.connected_at else None,
+            "messages_processed": self.message_count if connected else 0,
+            "next_scheduled_check": (
+                None if self.schedule.is_discovery_window(now)
+                else self.schedule.next_window_start(now).strftime("%Y-%m-%d %H:%M %Z")
+            ),
+            "outside_window": not self.schedule.is_discovery_window(now),
+        }
 
     def _now(self) -> datetime:
         return self.schedule.as_local(self.clock())
@@ -284,9 +335,15 @@ class ScheduledLiveMonitor:
         return None
 
     async def _discover_and_start_live(self) -> bool:
+        async with self._discovery_lock:
+            return await self._discover_and_start_live_unlocked()
+
+    async def _discover_and_start_live_unlocked(self) -> bool:
         try:
             channel_id = await self._resolve_channel_id()
         except YouTubeQuotaExceededError:
+            if self._manual_check:
+                raise
             logger.warning(
                 "Quota do YouTube esgotada ao resolver o canal. A descoberta sera "
                 "desativada ate a proxima janela agendada."
@@ -307,6 +364,8 @@ class ScheduledLiveMonitor:
         try:
             video_id = await self.youtube_client.find_active_live_video_id(channel_id)
         except YouTubeQuotaExceededError:
+            if self._manual_check:
+                raise
             logger.warning(
                 "Quota do YouTube esgotada durante a busca de live. A descoberta "
                 "sera desativada ate a proxima janela agendada."
@@ -337,6 +396,8 @@ class ScheduledLiveMonitor:
         try:
             self._active_task = await self.start_live_chat(video_id)
         except YouTubeQuotaExceededError:
+            if self._manual_check:
+                raise
             logger.warning(
                 "Quota do YouTube esgotada ao conectar na live %s. A descoberta "
                 "sera desativada ate a proxima janela agendada.",
@@ -344,6 +405,7 @@ class ScheduledLiveMonitor:
             )
             self._finish_today("quota excedida")
             return False
+
         except YouTubeLiveChatUnavailableError as exc:
             logger.error(
                 "Live %s foi encontrada, mas o chat nao esta disponivel (%s). "
@@ -367,6 +429,9 @@ class ScheduledLiveMonitor:
                 exc,
             )
             return False
+
+        self.connected_at = self._now()
+        self.live_chat_id = getattr(self._active_task, "live_chat_id", None)
 
         logger.info(
             "Chat da live %s iniciado; novas buscas serao interrompidas enquanto "

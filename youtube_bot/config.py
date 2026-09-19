@@ -57,6 +57,7 @@ class Settings:
     youtube_live_schedule_end: str
     youtube_live_schedule_poll_minutes: int
     youtube_live_resume_grace_minutes: int
+    youtube_live_recovery_grace_minutes: int
     giphy_api_key: str
     tts_provider: str
     tts_voice: str
@@ -151,6 +152,9 @@ def load_settings() -> Settings:
         ),
         youtube_live_resume_grace_minutes=_int(
             os.getenv("YOUTUBE_LIVE_RESUME_GRACE_MINUTES"), 30
+        ),
+        youtube_live_recovery_grace_minutes=_int(
+            os.getenv("YOUTUBE_LIVE_RECOVERY_GRACE_MINUTES"), 30
         ),
         giphy_api_key=os.getenv("GIPHY_API_KEY", ""),
         tts_provider=os.getenv("TTS_PROVIDER", "gtts").strip().lower(),

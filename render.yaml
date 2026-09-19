@@ -53,6 +53,8 @@ services:
         sync: false
       - key: YOUTUBE_LIVE_RESUME_GRACE_MINUTES
         sync: false
+      - key: YOUTUBE_LIVE_RECOVERY_GRACE_MINUTES
+        sync: false
       - key: YOUTUBE_LIVE_CONNECT_MESSAGE
         sync: false
       - key: GIPHY_API_KEY
