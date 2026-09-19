@@ -556,7 +556,10 @@ async def cleanup_old_tts(
             DELETE FROM tts_solicitacoes
             WHERE status IN ('concluido', 'erro')
               AND criado_em < now() - make_interval(
-                    hours => CASE WHEN source = 'api' THEN $2 ELSE $1 END
+                    hours => CASE
+                        WHEN source = 'api' THEN $2::double precision
+                        ELSE $1::double precision
+                    END
                   )
             RETURNING id
         )
