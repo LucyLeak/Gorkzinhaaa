@@ -568,8 +568,8 @@ async def cleanup_old_tts(
             WHERE status IN ('concluido', 'erro')
               AND criado_em < now() - make_interval(
                     hours => CASE
-                        WHEN source = 'api' THEN $2::double precision
-                        ELSE $1::double precision
+                        WHEN source = 'api' THEN $2::int
+                        ELSE $1::int
                     END
                   )
             RETURNING id
