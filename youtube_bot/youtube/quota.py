@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from typing import TYPE_CHECKING
@@ -35,21 +35,21 @@ class QuotaTracker:
         self.db = db
         self.safety_margin = max(0, safety_margin)
         self.daily_quota = daily_quota
-        self._memory: dict[str, int] = {}
+        self._memory: dict[date, int] = {}
 
     @staticmethod
-    def date_key(now: datetime | None = None) -> str:
-        return (now or datetime.now(timezone.utc)).astimezone(PACIFIC).date().isoformat()
+    def date_key(now: datetime | None = None) -> date:
+        return (now or datetime.now(timezone.utc)).astimezone(PACIFIC).date()
 
     def cost_for(self, operation: str) -> int:
         return self.COSTS.get(operation, 1)
 
-    async def _used(self, day: str) -> int:
+    async def _used(self, day: date) -> int:
         if day in self._memory:
             return self._memory[day]
         try:
             value = await self.db.fetchval(
-                "SELECT units_used FROM youtube_quota_usage WHERE usage_date = $1::date",
+                "SELECT units_used FROM youtube_quota_usage WHERE usage_date = $1",
                 day,
             )
         except Exception:
@@ -72,7 +72,7 @@ class QuotaTracker:
         try:
             updated = await self.db.fetchval(
                 """INSERT INTO youtube_quota_usage (usage_date, units_used)
-                   VALUES ($1::date, $2)
+                   VALUES ($1, $2)
                    ON CONFLICT (usage_date) DO UPDATE
                    SET units_used = youtube_quota_usage.units_used + EXCLUDED.units_used,
                        updated_at = now()
@@ -92,7 +92,7 @@ class QuotaTracker:
         used = await self._used(day)
         reset = quota_reset_at()
         return {
-            "date": day,
+            "date": day.isoformat(),
             "limit": self.daily_quota,
             "used": used,
             "remaining": max(0, self.daily_quota - used),

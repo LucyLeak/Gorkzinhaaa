@@ -174,6 +174,12 @@ async def main() -> None:
     )
     await tts_ws.start()
     tts_cleanup_task = asyncio.create_task(_tts_cleanup_loop(db, settings))
+    logger.info(
+        "TTS cleanup task started (interval=%ss, retention=%sh, api_retention=%sh).",
+        TTS_CLEANUP_INTERVAL_SECONDS,
+        settings.tts_retention_hours,
+        settings.tts_api_retention_hours,
+    )
 
     # ── Resolver channel ID a partir do @handle ──────────────────────
     live_video_id: str | None = None
