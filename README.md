@@ -86,8 +86,17 @@ Copy-Item .env.example .env
 OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://api.fireworks.ai/inference/v1
 OPENAI_CHAT_MODEL=accounts/fireworks/models/deepseek-v3p1
-OPENAI_EMBEDDING_MODEL=fireworks/qwen3-embedding-8b
-OPENAI_EMBEDDING_DIMENSIONS=1536
+EMBEDDING_API_KEY=...                 # Opcional; usa OPENAI_API_KEY se omitida
+EMBEDDING_BASE_URL=...                # Deve suportar POST /v1/embeddings
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
+
+O cliente de embeddings e separado do cliente de chat. `EMBEDDING_BASE_URL` deve
+apontar para um provider que implemente `POST /v1/embeddings` e disponibilize o
+modelo definido em `EMBEDDING_MODEL`. Se a URL nao for configurada, o bot usa
+`OPENAI_BASE_URL` com um aviso; isso pode falhar quando o provider atende apenas
+chat. Falhas de embedding nao interrompem as respostas da live: o bot segue sem
+memorias semanticas e abre um circuit breaker de cinco minutos apos tres falhas.
 
 # ── Banco de dados (Neon PostgreSQL) ──────────────
 NEON_DATABASE_URL=postgresql://...

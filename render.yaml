@@ -13,9 +13,13 @@ services:
         sync: false
       - key: OPENAI_CHAT_MODEL
         sync: false
-      - key: OPENAI_EMBEDDING_MODEL
+      - key: EMBEDDING_API_KEY
         sync: false
-      - key: OPENAI_EMBEDDING_DIMENSIONS
+      - key: EMBEDDING_BASE_URL
+        sync: false
+      - key: EMBEDDING_MODEL
+        sync: false
+      - key: EMBEDDING_DIMENSIONS
         sync: false
       - key: NEON_DATABASE_URL
         sync: false
