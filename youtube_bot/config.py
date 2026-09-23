@@ -34,10 +34,12 @@ def _int(value: str | None, default: int) -> int:
 class Settings:
     openai_api_key: str
     openai_base_url: str
+    embedding_api_key: str
+    embedding_base_url: str
+    embedding_model: str
+    embedding_dimensions: int | None
     openai_json_mode: bool
     openai_chat_model: str
-    openai_embedding_model: str
-    openai_embedding_dimensions: int | None
     database_url: str
     youtube_client_id: str
     youtube_client_secret: str
@@ -113,11 +115,20 @@ def load_settings() -> Settings:
         ),
         openai_json_mode=_bool(os.getenv("OPENAI_JSON_MODE"), False),
         openai_chat_model=os.getenv("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
-        openai_embedding_model=os.getenv(
-            "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
+        embedding_api_key=os.getenv("EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY", ""),
+        embedding_base_url=_normalize_openai_base_url(
+            os.getenv("EMBEDDING_BASE_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or os.getenv("OPENAI_API_BASE")
+            or ""
         ),
-        openai_embedding_dimensions=_optional_int(
-            os.getenv("OPENAI_EMBEDDING_DIMENSIONS")
+        embedding_model=os.getenv(
+            "EMBEDDING_MODEL",
+            os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"),
+        ),
+        embedding_dimensions=_optional_int(
+            os.getenv("EMBEDDING_DIMENSIONS")
+            or os.getenv("OPENAI_EMBEDDING_DIMENSIONS")
         ),
         database_url=os.getenv("NEON_DATABASE_URL", ""),
         youtube_client_id=os.getenv("YOUTUBE_CLIENT_ID", ""),

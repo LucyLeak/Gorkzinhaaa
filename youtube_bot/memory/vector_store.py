@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from youtube_bot.db.pool import Database
 
@@ -23,6 +24,8 @@ class VectorMemoryStore:
         self.openai_client = openai_client
         self.embedding_model = embedding_model
         self.embedding_dimensions = embedding_dimensions
+        self._embedding_failures = 0
+        self._embedding_circuit_open_until = 0.0
 
     @property
     def can_embed(self) -> bool:
@@ -30,7 +33,7 @@ class VectorMemoryStore:
 
     async def embed_text(self, text: str) -> list[float]:
         if self.openai_client is None:
-            raise RuntimeError("OPENAI_API_KEY nao configurada para gerar embeddings.")
+            raise RuntimeError("EMBEDDING_API_KEY nao configurada para gerar embeddings.")
         payload = {"model": self.embedding_model, "input": text}
         if self.embedding_dimensions:
             payload["dimensions"] = self.embedding_dimensions
@@ -73,7 +76,21 @@ class VectorMemoryStore:
         if not self.can_embed:
             return []
 
-        query_embedding = _vector_literal(await self.embed_text(query_text))
+        if time.monotonic() < self._embedding_circuit_open_until:
+            return []
+        try:
+            query_embedding = _vector_literal(await self.embed_text(query_text))
+            self._embedding_failures = 0
+        except Exception as exc:
+            self._embedding_failures += 1
+            if self._embedding_failures >= 3:
+                self._embedding_circuit_open_until = time.monotonic() + 300
+                logger.warning(
+                    "Embedding circuit breaker aberto por 5 minutos apos %d falhas.",
+                    self._embedding_failures,
+                )
+            logger.warning("Embedding falhou; seguindo sem memórias: %s", exc)
+            return []
         rows = await self.db.fetch(
             """
             SELECT texto_resumido

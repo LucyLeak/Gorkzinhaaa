@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import ssl
 import time
@@ -114,11 +115,25 @@ async def main() -> None:
         if settings.openai_api_key
         else None
     )
+    embedding_base_url = os.getenv("EMBEDDING_BASE_URL")
+    if not embedding_base_url:
+        logger.warning(
+            "EMBEDDING_BASE_URL nao configurada; usando OPENAI_BASE_URL. "
+            "O provider de chat pode nao suportar /v1/embeddings."
+        )
+    embedding_client = (
+        AsyncOpenAI(
+            api_key=settings.embedding_api_key,
+            base_url=settings.embedding_base_url or None,
+        )
+        if settings.embedding_api_key
+        else None
+    )
     vector_store = VectorMemoryStore(
         db=db,
-        openai_client=openai_client,
-        embedding_model=settings.openai_embedding_model,
-        embedding_dimensions=settings.openai_embedding_dimensions,
+        openai_client=embedding_client,
+        embedding_model=settings.embedding_model,
+        embedding_dimensions=settings.embedding_dimensions,
     )
     validator = Validator(
         forbidden_words=settings.forbidden_words,
