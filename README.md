@@ -86,6 +86,7 @@ Copy-Item .env.example .env
 OPENAI_API_KEY=sk-...
 OPENAI_BASE_URL=https://api.fireworks.ai/inference/v1
 OPENAI_CHAT_MODEL=accounts/fireworks/models/deepseek-v3p1
+OPENAI_JSON_MODE=false                # true = envia response_format json_object (valide com tools/test_cohere_json_mode.py)
 EMBEDDING_API_KEY=...                 # Opcional; usa OPENAI_API_KEY se omitida
 EMBEDDING_BASE_URL=...                # Deve suportar POST /v1/embeddings
 EMBEDDING_MODEL=text-embedding-3-small
@@ -184,10 +185,46 @@ O Neon precisa ter a extensão `vector` habilitada.
 A aba **Personalidades** do painel administrativo lista usuários com busca por
 handle/nome ou `youtube_channel_id`, paginação de aproximadamente 50 registros,
 contagem total e edição inline de personalidade (`amigo`, `neutro`, `inimigo`,
-`evitar` ou `bloqueado`) e notas. O padrão aplicado é `neutro`; os campos são
-administrativos e ainda não alteram os prompts dos cérebros. Comentários e lives
-usam o channel ID como identidade preferencial; quando ausente, o nome é usado
-como fallback com aviso no log, preservando o histórico.
+`evitar` ou `bloqueado`) e notas. O padrão aplicado é `neutro` (inclusive quando
+a coluna está `NULL`). Comentários e lives usam o channel ID como identidade
+preferencial; quando ausente, o nome é usado como fallback com aviso no log,
+preservando o histórico.
+
+A personalidade afeta apenas a **geração** da resposta: uma instrução forte
+(2–4 frases, em português) é adicionada ao **início do system prompt de ambos os
+cérebros** (A sério e B humorístico), com ajuste de temperatura por
+personalidade. A validação (`validator.py`) continua avaliando a mensagem final
+com os mesmos critérios para todos os usuários.
+
+| Valor | Comportamento do bot | Temperatura (delta sobre o padrão do cérebro) |
+|---|---|---|
+| `amigo` | Trata o usuário como amigo próximo: gentil, caloroso e afetuoso, com elogios sinceros, concordância frequente e puxando assunto. Tom informal. | +0.1 |
+| `neutro` | Padrão. Nenhuma instrução de tom é adicionada ao prompt; comportamento idêntico ao anterior. | 0.0 |
+| `inimigo` | Sarcástico, irônico e debochado, provocando e implicando sempre que possível — "amigo que vive implicando", nunca inimigo real: nada de xingamento pesado, racismo, homofobia ou violação das diretrizes do YouTube. | +0.2 |
+| `evitar` | Encerra a conversa rápido: resposta mínima, monossílabos quando possível, sem perguntas, sem puxar assunto, sem piadas; seco mas educado. | −0.2 |
+| `bloqueado` | O usuário é ignorado por completo: nenhuma resposta é gerada, nenhuma chamada de IA é feita (economiza tokens/quota), comandos fun não são processados e a mensagem não é registrada no histórico. Log em nível DEBUG: `User <id> blocked; skipping reply.` | — |
+
+Os deltas são as constantes `PERSONALITY_TEMPERATURE_DELTAS` em `diretor.py`,
+aplicadas sobre a temperatura padrão do cérebro escolhido e limitadas a
+[0.0, 1.0] (`_personality_temperature`) — o Cohere command-r rejeita
+temperatura acima de 1.0, e cerebro_b (0.9) + inimigo (0.2) ultrapassaria.
+
+**Decisão sobre `neutro` com notas:** notas preenchidas são aplicadas **mesmo
+com personalidade `neutro`** — a nota é um override manual do administrador e
+independe da ausência de instrução de tom. Nesse caso a instrução enviada ao
+cérebro contém apenas `Notas sobre este usuario: <notas>` (sem instrução de
+personalidade) e a temperatura permanece no padrão. Sem notas e sem
+personalidade, nada é adicionado ao prompt.
+
+Notas (`personalidade_notas`) não vazias são incluídas na instrução como
+`Notas sobre este usuario: <notas>`, para qualquer personalidade (inclusive
+`neutro`). Cada resposta com personalidade aplicada registra no log INFO:
+`Personality applied: <valor> for user <id>.` Em `LOG_LEVEL=DEBUG`, o cérebro
+registra o prompt completo enviado ao provider: `System prompt final (<nome>).`
+
+O diretor marca cada despacho com um campo `reason` (`normal`, `bloqueado` ou
+`empty_after_parse` — quando a mensagem fica vazia após o parse), registrado no
+log de `process_live_message`/`process_comment`.
 
 O Terminal de Teste TTS grava cada execução em `tts_solicitacoes` usando o usuário
 administrativo reservado configurado por `ADMIN_TEST_USER_ID` e
@@ -390,6 +427,44 @@ graph TD
     L --> M[Armazena memória no pgvector]
 ```
 
+### Saída da IA: JSON, tags e fallback plain-text
+
+Os cérebros são instruídos a responder somente com
+`{"thought": "...", "message": "..."}`. O parse acontece **uma única vez,
+dentro do cérebro** (`Brain.generate` → `prepare_chat_message`): o `thought` é
+logado ali e nunca sai do cérebro; o validator recebe a mensagem já extraída e
+limpa (sem re-parse) e o `main.py` apenas sanitiza, limita a 150 caracteres e
+posta. O parser trata, nesta ordem:
+
+1. **JSON válido** → `thought` é logado (nunca postado), `message` segue.
+2. **Tags `<think>...</think>`** → conteúdo da tag é logado, o restante segue.
+3. **JSON malformado começando com `{`** → bloqueado (risco de vazamento de
+   raciocínio), com erro no log.
+4. **Texto puro** (sem JSON e sem tags) → é o fallback da Task 1b: publicado
+   como mensagem final para o bot não ficar mudo quando o modelo responde fora
+   do envelope JSON (ex.: Cohere com `OPENAI_JSON_MODE=false`). Antes de
+   publicar, a **heurística anti-leak** (`_LEAK_PATTERNS`) bloqueia textos que
+   começam com marcadores típicos de raciocínio em voz alta ("Vou...", "O
+   usuário...", "Analisando...", etc.) com o aviso `Plain-text looks like
+   reasoning; blocking to avoid leak.`; os demais são publicados com o aviso
+   `Plain-text fallback used for brain reply.` Um falso positivo custa um ciclo
+   de reparo, não silêncio: o modelo reescreve e a resposta cansativa de
+   fallback ("Desculpe, nao entendi bem...") não casa com a heurística.
+5. **Chamadores que exigem saída estruturada** podem passar
+   `allow_plain_text=False` (`prepare_chat_message`), que bloqueia qualquer
+   texto puro por política (`Plain-text fallback blocked by policy.`).
+
+O modo JSON forçado (`response_format={"type": "json_object"}`) é controlado por
+`OPENAI_JSON_MODE` (padrão `false`). A compatibilidade da Cohere documenta
+`response_format` como suportado; valide no seu modelo/chave com:
+
+```powershell
+python tools/test_cohere_json_mode.py --api-key SUA_CHAVE
+```
+
+Se o teste passar, defina `OPENAI_JSON_MODE=true` no Render. O fallback de texto
+puro permanece como rede de segurança e não conflita com o JSON mode.
+
 ### Fluxo de Inicialização
 
 ```mermaid
@@ -520,6 +595,9 @@ Isso garante que o TTS sempre funcione, mesmo se o Catbox estiver offline.
 
 | Feature | Arquivos |
 |---|---|
+| **Fallback plain-text** — respostas em texto puro são publicadas em vez de bloqueadas; JSON malformado com `{` continua bloqueado | `utils/helpers.py`, `tests/test_prepare_chat_message.py` (novo) |
+| **Personalidades ativas** — instruções por usuário no prompt dos cérebros; `bloqueado` pula IA/fun/histórico; campo `reason` no diretor | `brains/diretor.py`, `brains/base.py`, `validation/validator.py`, `main.py` |
+| **Teste de JSON mode** — valida `response_format json_object` no provider configurado | `tools/test_cohere_json_mode.py` (novo) |
 | **Admin Panel** — Painel web com 4 abas (config, TTS queue, limpeza, terminal) | `admin_panel.py` (novo) |
 | **Limpeza de áudios** — Remove arquivos antigos priorizando maiores | `fun/audio_cleanup.py` (novo) |
 | **Coluna `aprovado`** — Tabela `tts_solicitacoes` com aprovação/rejeição | `migrations/002_tts_approval.sql` (novo) |

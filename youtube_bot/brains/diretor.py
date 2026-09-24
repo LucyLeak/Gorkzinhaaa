@@ -25,6 +25,40 @@ from youtube_bot.validation.validator import ValidationResult, Validator
 
 logger = logging.getLogger(__name__)
 
+# Instrucoes de personalidade injetadas no inicio do system prompt de AMBOS os
+# cerebros. 'neutro' nao gera instrucao de tom; 'bloqueado' nem chega a gerar
+# resposta.
+PERSONALITY_INSTRUCTIONS: dict[str, str] = {
+    "amigo": (
+        "Você trata este usuário como um amigo próximo. É gentil, caloroso e "
+        "demonstra que gosta dele: faça elogios sinceros quando couber, concorde "
+        "com ele com frequência e puxe assunto como quem quer continuar a "
+        "conversa. Tom informal e afetuoso."
+    ),
+    "inimigo": (
+        "Você não gosta deste usuário. É sarcástico, irônico e responde com "
+        "deboche: provoque e implique com ele sempre que possível, mas SEM "
+        "ofender de verdade — nada de xingamento pesado, racismo, homofobia ou "
+        "qualquer violação das diretrizes do YouTube. O tom é de 'amigo que "
+        "vive implicando', não de inimigo de verdade."
+    ),
+    "evitar": (
+        "Você quer encerrar a conversa rápido com este usuário. Responda com o "
+        "mínimo necessário, monossílabos quando possível, sem fazer perguntas, "
+        "sem puxar assunto e sem contar piadas. Se ele insistir, responda de "
+        "forma seca e educada."
+    ),
+}
+
+# Ajuste de temperatura por personalidade, aplicado sobre a temperatura padrao
+# do cerebro escolhido e limitado a [0.0, 1.0] (ver _personality_temperature).
+# 'neutro'/'bloqueado' nao alteram a temperatura.
+PERSONALITY_TEMPERATURE_DELTAS: dict[str, float] = {
+    "amigo": 0.1,
+    "inimigo": 0.2,
+    "evitar": -0.2,
+}
+
 
 @dataclass
 class DirectorReply:
@@ -32,6 +66,11 @@ class DirectorReply:
     brain_name: str
     approved: bool
     reasons: list[str]
+    # Motivo do despacho: "normal" (resposta gerada) ou "bloqueado" (usuario
+    # com personalidade 'bloqueado'; nenhuma resposta gerada). O motivo
+    # "empty_after_parse" e registrado em process_live_message/process_comment
+    # quando a mensagem fica vazia apos o parse.
+    reason: str = "normal"
 
 
 class Director:
@@ -68,10 +107,21 @@ class Director:
         user = await models.upsert_user(
             self.db, user_youtube_id, display_name, author_channel_id
         )
-        user["personalidade"] = user.get("personalidade") or "neutro"
-        # TODO: disponibilizar personalidade/notas ao contexto quando o comportamento for ativado.
+        personality = user.get("personalidade") or "neutro"
+        if personality == "bloqueado":
+            # Usuario ignorado por completo: sem resposta, sem chamada de IA,
+            # sem comandos fun e sem registro de memoria (economiza tokens/quota).
+            return DirectorReply("", "diretor", False, [], reason="bloqueado")
         user_id = int(user["id"])
         await models.insert_message(self.db, user_id, user_message, message_type)
+
+        personality_instruction = self._personality_instruction(
+            personality, user.get("personalidade_notas")
+        )
+        if personality_instruction:
+            logger.info(
+                "Personality applied: %s for user %s.", personality, user_youtube_id
+            )
 
         fun_reply = await self._maybe_handle_fun(user_id, user_message)
         if fun_reply:
@@ -98,6 +148,8 @@ class Director:
             context=memories,
             brain=selected_brain,
             max_attempts=self.settings.max_repair_attempts,
+            personality_instruction=personality_instruction,
+            temperature=self._personality_temperature(selected_brain, personality),
         )
 
         if not result.approved:
@@ -114,6 +166,8 @@ class Director:
                 context=memories,
                 brain=alternate,
                 max_attempts=1,
+                personality_instruction=personality_instruction,
+                temperature=self._personality_temperature(alternate, personality),
             )
 
         reply = self._reply_from_result(result)
@@ -161,6 +215,29 @@ class Director:
 
     def _alternate_brain(self, brain_name: str) -> Brain:
         return self.brain_b if brain_name == self.brain_a.name else self.brain_a
+
+    @staticmethod
+    def _personality_instruction(personality: str, notes: str | None) -> str | None:
+        parts: list[str] = []
+        instruction = PERSONALITY_INSTRUCTIONS.get(personality)
+        if instruction:
+            parts.append(instruction)
+        notes_text = (notes or "").strip()
+        if notes_text:
+            parts.append(f"Notas sobre este usuario: {notes_text}")
+        if not parts:
+            return None
+        return " ".join(parts)
+
+    @staticmethod
+    def _personality_temperature(brain: Brain, personality: str) -> float | None:
+        # Temperatura absoluta enviada ao provider: default do cerebro + delta
+        # da personalidade, limitada a [0.0, 1.0] (o Cohere command-r rejeita
+        # temperature > 1.0; sem o clamp, cerebro_b 0.9 + 0.2 = 1.1 daria 400).
+        delta = PERSONALITY_TEMPERATURE_DELTAS.get(personality)
+        if not delta:
+            return None
+        return min(max(brain.default_temperature + delta, 0.0), 1.0)
 
     def _reply_from_result(self, result: ValidationResult) -> DirectorReply:
         if result.approved and result.answer:

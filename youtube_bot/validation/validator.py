@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from youtube_bot.brains.base import Brain
 from youtube_bot.memory.vector_store import VectorMemoryStore
-from youtube_bot.utils.helpers import MAX_CHAT_MESSAGE_CHARS, prepare_chat_message
+from youtube_bot.utils.helpers import MAX_CHAT_MESSAGE_CHARS
 from youtube_bot.validation.metrics import cosine_similarity
 
 
@@ -34,8 +34,17 @@ class Validator:
         context: list[str],
         brain: Brain,
         max_attempts: int,
+        personality_instruction: str | None = None,
+        temperature: float | None = None,
     ) -> ValidationResult:
-        answer = await brain.generate(context=context, user_message=question)
+        # brain.generate ja devolve a mensagem publica extraida (parse unico no
+        # cerebro, com anti-leak); aqui nao ha re-parse.
+        answer = await brain.generate(
+            context=context,
+            user_message=question,
+            personality_instruction=personality_instruction,
+            temperature=temperature,
+        )
         attempts = 1
 
         while attempts <= max_attempts:
@@ -48,28 +57,31 @@ class Validator:
                 original_message=question,
                 context=context,
                 feedback="; ".join(reasons),
+                personality_instruction=personality_instruction,
+                temperature=temperature,
             )
             attempts += 1
 
         return ValidationResult(False, answer, brain.name, ["tentativas esgotadas"], attempts)
 
     async def validate(self, question: str, answer: str, brain_name: str) -> list[str]:
+        # answer chega ja extraida e limitada (parse unico no cerebro).
         reasons: list[str] = []
-        _, public_answer = prepare_chat_message(answer, allow_plain_text=False)
-        lower = public_answer.lower()
+        lower = answer.lower()
 
         if any(word and word in lower for word in self.forbidden_words):
             reasons.append("conteudo bloqueado por palavra proibida")
-        if len(public_answer) < 10:
+        if len(answer) < 10:
             reasons.append("resposta muito curta")
-        if len(public_answer) > MAX_CHAT_MESSAGE_CHARS:
+        if len(answer) > MAX_CHAT_MESSAGE_CHARS:
             reasons.append(f"resposta acima de {MAX_CHAT_MESSAGE_CHARS} caracteres")
 
-        coherence = await self._coherence(question, public_answer)
-        if coherence is not None and coherence < self.coherence_threshold:
-            reasons.append(f"baixa coerencia semantica ({coherence:.2f})")
+        if answer:
+            coherence = await self._coherence(question, answer)
+            if coherence is not None and coherence < self.coherence_threshold:
+                reasons.append(f"baixa coerencia semantica ({coherence:.2f})")
 
-        reasons.extend(self._personality_reasons(public_answer, brain_name))
+        reasons.extend(self._personality_reasons(answer, brain_name))
         return reasons
 
     async def _coherence(self, question: str, answer: str) -> float | None:

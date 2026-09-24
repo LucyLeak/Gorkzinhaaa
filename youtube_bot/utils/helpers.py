@@ -21,6 +21,16 @@ _UNCLOSED_THINK_PATTERN = re.compile(
 )
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _JSON_FRAGMENT_LINE_PATTERN = re.compile(r'^\s*["\']?(?:thought|message)["\']?\s*:', re.IGNORECASE)
+# Heuristica anti-leak: texto puro que comeca com padroes de raciocinio
+# ("pensando em voz alta") e bloqueado em vez de publicado no chat.
+_LEAK_PATTERNS = re.compile(
+    r"^\s*(?:"
+    r"vou|devo|preciso|o usuário|o usuario|o pedido|analisando|pensando|"
+    r"deixa eu|talvez|primeiro|então|entao|aqui está o raciocínio|"
+    r"aqui esta o raciocinio|vou responder|devo responder|o melhor é|o melhor e"
+    r")\b",
+    re.IGNORECASE,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -125,8 +135,19 @@ def prepare_chat_message(
     text: str,
     max_chars: int = MAX_CHAT_MESSAGE_CHARS,
     allow_plain_text: bool = True,
+    anti_leak: bool = True,
 ) -> tuple[str, str]:
-    """Parse structured output first, then retain backwards-compatible tag parsing."""
+    """Parse estruturado primeiro, depois tags <think>; texto puro por último.
+
+    Fluxo do branch não-JSON (raw não começa com "{"):
+    - allow_plain_text=False  -> fail-closed: bloqueia texto puro ("", "").
+      Reservado para quem QUER garantir saída estruturada.
+    - anti_leak=True e o texto parece raciocínio em voz alta
+      (_LEAK_PATTERNS)       -> bloqueado ("", "") para evitar vazamento.
+    - caso contrário          -> publicado como mensagem final, com aviso
+      "Plain-text fallback used for brain reply." (é o caminho do cérebro no
+      parse único: Brain.generate chama com os defaults).
+    """
     if not text:
         return "", ""
 
@@ -139,17 +160,29 @@ def prepare_chat_message(
     try:
         data = json.loads(json_candidate)
     except json.JSONDecodeError:
+        if raw.startswith("{"):
+            if re.search(r'["\']?thought["\']?\s*:', raw, re.IGNORECASE):
+                logger.error("Resposta estruturada invalida contem thought; bloqueando postagem.")
+            else:
+                logger.error("Resposta da IA parece JSON malformado; bloqueando postagem.")
+            return "", ""
         logger.warning("Resposta da IA nao esta em JSON; usando parser legado.")
-        if raw.startswith("{") and re.search(r'["\']?thought["\']?\s*:', raw, re.IGNORECASE):
-            logger.error("Resposta estruturada invalida contem thought; bloqueando postagem.")
-            return "", ""
         thought, message = parse_thinking_response(raw)
-        if not allow_plain_text and not thought:
-            logger.error("Resposta da IA sem JSON ou tags de pensamento; bloqueando postagem.")
+        if thought:
+            return sanitize_for_chat(thought), limit_chat_message(
+                sanitize_for_chat(message), max_chars
+            )
+        if _THINK_BLOCK_PATTERN.search(raw) or _UNCLOSED_THINK_PATTERN.search(raw):
+            # Sobrou apenas conteudo dentro de tags de pensamento; nada publicavel.
             return "", ""
-        return sanitize_for_chat(thought), limit_chat_message(
-            sanitize_for_chat(message), max_chars
-        )
+        if not allow_plain_text:
+            logger.warning("Plain-text fallback blocked by policy.")
+            return "", ""
+        if anti_leak and _LEAK_PATTERNS.match(message):
+            logger.warning("Plain-text looks like reasoning; blocking to avoid leak.")
+            return "", ""
+        logger.warning("Plain-text fallback used for brain reply.")
+        return "", limit_chat_message(sanitize_for_chat(message), max_chars)
 
     if not isinstance(data, dict):
         logger.warning("Resposta JSON da IA nao e um objeto; bloqueando postagem.")

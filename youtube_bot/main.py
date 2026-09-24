@@ -28,7 +28,7 @@ from youtube_bot.tts_ws_server import TtsWebSocketServer
 from youtube_bot.utils.helpers import (
     extract_youtube_video_id,
     utc_now,
-    prepare_chat_message,
+    limit_chat_message,
     sanitize_for_chat,
 )
 from youtube_bot.utils.logger import configure_logging
@@ -654,32 +654,29 @@ async def process_live_message(
             message_type="live",
             author_channel_id=message.author_channel_id or None,
         )
+        if reply.reason == "bloqueado":
+            logger.debug(
+                "User %s blocked; skipping reply.",
+                message.author_channel_id or message.author_name,
+            )
+            return
         logger.info("Raw AI reply: %r", reply.text)
-        thought, message_text = prepare_chat_message(
-            reply.text,
-            allow_plain_text=reply.brain_name not in {"cerebro_a", "cerebro_b"},
-        )
-        if thought:
-            logger.info("Pensamento do bot: %s", thought)
-
-        message_text = sanitize_for_chat(message_text)
-        if thought and thought.strip() and thought.casefold() in message_text.casefold():
-            logger.error("Pensamento da IA vazou para a mensagem; postagem bloqueada.")
-            return
-        if reply.text.lstrip().startswith("{") and "thought" in reply.text.casefold() and not message_text:
-            logger.error("Resposta JSON contem thought, mas message esta vazia; postagem bloqueada.")
-            return
+        # O cerebro ja devolve a mensagem publica (parse unico com anti-leak e
+        # thought logado la dentro); aqui apenas sanitizamos e limitamos.
+        message_text = limit_chat_message(sanitize_for_chat(reply.text))
         if not message_text:
             logger.warning(
-                "A resposta do bot ficou vazia apos remover o pensamento. Nao sera enviada."
+                "A resposta do bot ficou vazia apos o parse "
+                "(reason=empty_after_parse). Nao sera enviada."
             )
             return
 
         await live_client.post_message(live_chat_id, message_text)
         logger.info(
-            "Live %s: respondido com %s.",
+            "Live %s: respondido com %s (reason=%s).",
             live_chat_id,
             reply.brain_name,
+            reply.reason,
         )
     except Exception:
         logger.exception("Falha ao processar mensagem da live %s.", live_chat_id)
@@ -757,30 +754,25 @@ async def process_comment(
             message_type="comment",
             author_channel_id=comment.author_channel_id or None,
         )
-        thought, message_text = prepare_chat_message(
-            reply.text,
-            allow_plain_text=reply.brain_name not in {"cerebro_a", "cerebro_b"},
-        )
-        if thought:
-            logger.info("Pensamento do bot: %s", thought)
-
-        message_text = sanitize_for_chat(message_text)
-        if thought and thought.strip() and thought.casefold() in message_text.casefold():
-            logger.error("Pensamento da IA vazou para o comentario; postagem bloqueada.")
+        if reply.reason == "bloqueado":
+            logger.debug(
+                "User %s blocked; skipping reply.",
+                comment.author_channel_id or comment.author_name,
+            )
             return
-        if reply.text.lstrip().startswith("{") and "thought" in reply.text.casefold() and not message_text:
-            logger.error("Resposta JSON contem thought, mas message esta vazia; postagem bloqueada.")
-            return
+        message_text = limit_chat_message(sanitize_for_chat(reply.text))
         if not message_text:
             logger.warning(
-                "A resposta do bot ficou vazia apos remover o pensamento. Nao sera enviada."
+                "A resposta do bot ficou vazia apos o parse "
+                "(reason=empty_after_parse). Nao sera enviada."
             )
             return
         await youtube_client.post_reply(comment.comment_id, message_text)
         logger.info(
-            "Comentario %s respondido com %s.",
+            "Comentario %s respondido com %s (reason=%s).",
             comment.comment_id,
             reply.brain_name,
+            reply.reason,
         )
     except Exception:
         logger.exception("Falha ao processar comentario %s.", comment.comment_id)
